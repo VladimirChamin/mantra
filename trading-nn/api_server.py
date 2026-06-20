@@ -552,7 +552,12 @@ class AdminTokensReq(BaseModel):
     fd_key: Optional[str] = None
 
 @app.get("/api/admin/tokens")
-def get_admin_tokens(user: dict = Depends(auth.require_admin)):
+def get_admin_tokens(reveal: bool = False, user: dict = Depends(auth.require_admin)):
+    if reveal:
+        return {
+            "tinvest_token": os.environ.get("TINVEST_TOKEN", "") or None,
+            "fd_key": os.environ.get("FINANCIALDATA_API_KEY", "") or None,
+        }
     return {
         "tinvest_token_set": bool(os.environ.get("TINVEST_TOKEN", "").strip()),
         "fd_key_set": bool(os.environ.get("FINANCIALDATA_API_KEY", "").strip()),

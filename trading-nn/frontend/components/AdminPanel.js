@@ -162,8 +162,18 @@ function btnStyle(bg, border) {
 }
 
 // ─── Поле токена с кнопкой показать/скрыть ───────────────────────────────────
-function TokenField({ label, value, onChange, placeholder, hint }) {
+function TokenField({ label, value, onChange, placeholder, hint, onReveal }) {
   const [show, setShow] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+
+  async function toggle() {
+    if (!show && onReveal) {
+      setRevealing(true);
+      try { await onReveal(); } finally { setRevealing(false); }
+    }
+    setShow(v => !v);
+  }
+
   return (
     <div className="field">
       <label>{label}</label>
@@ -179,15 +189,16 @@ function TokenField({ label, value, onChange, placeholder, hint }) {
         />
         <button
           type="button"
-          onClick={() => setShow(v => !v)}
+          onClick={toggle}
+          disabled={revealing}
           title={show ? "Скрыть" : "Показать"}
           style={{
             position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
-            background: "none", border: "none", cursor: "pointer",
+            background: "none", border: "none", cursor: revealing ? "default" : "pointer",
             color: "var(--muted)", fontSize: 15, padding: "2px 4px", lineHeight: 1,
           }}
         >
-          {show ? "🙈" : "👁"}
+          {revealing ? "…" : show ? "🙈" : "👁"}
         </button>
       </div>
       {hint && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{hint}</div>}
@@ -196,6 +207,8 @@ function TokenField({ label, value, onChange, placeholder, hint }) {
 }
 
 // ─── Блок настройки токенов API ───────────────────────────────────────────────
+const MASK = "●●●●●●●●●●●●";
+
 function ApiTokens() {
   const [tinvest, setTinvest]   = useState("");
   const [fd, setFd]             = useState("");
@@ -205,17 +218,27 @@ function ApiTokens() {
 
   useEffect(() => {
     apiReq("GET", "/api/admin/tokens").then(d => {
-      setTinvest(d.tinvest_token_set ? "●●●●●●●●●●●●" : "");
-      setFd(d.fd_key_set ? "●●●●●●●●●●●●" : "");
+      setTinvest(d.tinvest_token_set ? MASK : "");
+      setFd(d.fd_key_set ? MASK : "");
     }).catch(() => {});
   }, []);
+
+  async function revealTinvest() {
+    const d = await apiReq("GET", "/api/admin/tokens?reveal=true");
+    setTinvest(d.tinvest_token || "");
+  }
+
+  async function revealFd() {
+    const d = await apiReq("GET", "/api/admin/tokens?reveal=true");
+    setFd(d.fd_key || "");
+  }
 
   async function save() {
     setMsg(""); setErr(""); setLoading(true);
     try {
       const body = {};
-      if (tinvest && !tinvest.startsWith("●")) body.tinvest_token = tinvest;
-      if (fd && !fd.startsWith("●")) body.fd_key = fd;
+      if (tinvest && tinvest !== MASK) body.tinvest_token = tinvest;
+      if (fd && fd !== MASK) body.fd_key = fd;
       await apiReq("POST", "/api/admin/tokens", body);
       setMsg("Токены сохранены и применены");
     } catch (e) { setErr(e.message); }
@@ -232,6 +255,7 @@ function ApiTokens() {
           onChange={setTinvest}
           placeholder="t.xxxxxxxxxxxxxxxx"
           hint="Акции и облигации Мосбиржи"
+          onReveal={tinvest === MASK ? revealTinvest : null}
         />
         <TokenField
           label="FinancialData API ключ"
@@ -239,6 +263,7 @@ function ApiTokens() {
           onChange={setFd}
           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
           hint="Акции мировых бирж, ETF"
+          onReveal={fd === MASK ? revealFd : null}
         />
       </div>
       {msg && <div style={{ color: "var(--long)", fontSize: 13, marginBottom: 8 }}>✓ {msg}</div>}
