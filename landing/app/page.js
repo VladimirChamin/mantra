@@ -104,7 +104,17 @@ export default function Home() {
       </section>
 
       <footer className="footer">
-        © 2026 Mantra Trading · ML-терминал · Не является финансовой рекомендацией
+        <div className="footer-inner">
+          <nav className="footer-links">
+            <Link href="/privacy">Политика конфиденциальности</Link>
+            <Link href="/terms">Условия использования</Link>
+            <Link href="/oferta">Публичная оферта</Link>
+          </nav>
+          <p className="footer-copy">
+            © 2026 Mantra Trading · ML-торговый терминал<br />
+            Не является финансовой рекомендацией. Торговля сопряжена с риском потери капитала.
+          </p>
+        </div>
       </footer>
     </>
   );

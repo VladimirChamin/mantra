@@ -319,6 +319,22 @@ def users_list(user: dict = Depends(auth.require_admin)):
     return {"users": auth.list_users()}
 
 
+class ResetPasswordReq(BaseModel):
+    email: str
+
+
+@app.post("/api/auth/reset-password", tags=["auth"])
+def reset_password(req: ResetPasswordReq):
+    """Генерирует новый пароль и отправляет его на почту. Всегда возвращает 200."""
+    try:
+        masked = auth.reset_password(req.email)
+        return {"ok": True, "message": f"Если аккаунт существует, письмо отправлено на {masked}"}
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 class PatchUserReq(BaseModel):
     ai_quota: Optional[int] = None
     access_until: Optional[str] = None   # ISO datetime или "" для снятия лимита

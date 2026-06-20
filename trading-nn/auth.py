@@ -14,6 +14,11 @@ from __future__ import annotations
 import os
 import sqlite3
 import asyncio
+import secrets
+import string
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -204,6 +209,83 @@ def update_user_role(user_id: int, role: str) -> dict:
     if not user:
         raise ValueError("Пользователь не найден")
     return user
+
+
+# ---------------------------------------------------------------------------
+# Сброс пароля
+# ---------------------------------------------------------------------------
+_PWD_CHARS = string.ascii_letters + string.digits
+
+def _gen_password(length: int = 12) -> str:
+    return "".join(secrets.choice(_PWD_CHARS) for _ in range(length))
+
+
+def _send_email(to: str, subject: str, body_html: str) -> None:
+    """Отправляет письмо через SMTP из .env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM)."""
+    host  = os.environ.get("SMTP_HOST", "")
+    port  = int(os.environ.get("SMTP_PORT", "587"))
+    user  = os.environ.get("SMTP_USER", "")
+    pw    = os.environ.get("SMTP_PASS", "")
+    from_ = os.environ.get("SMTP_FROM", user)
+
+    if not host or not user:
+        raise RuntimeError(
+            "SMTP не настроен. Добавьте SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS в .env"
+        )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = from_
+    msg["To"]      = to
+    msg.attach(MIMEText(body_html, "html", "utf-8"))
+
+    with smtplib.SMTP(host, port, timeout=10) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(user, pw)
+        s.sendmail(from_, [to], msg.as_string())
+
+
+def reset_password(email: str) -> str:
+    """Генерирует новый пароль, обновляет БД, отправляет письмо. Возвращает маскированный email."""
+    user = get_user_by_email(email)
+    if not user:
+        # не раскрываем существование email
+        return _mask_email(email)
+
+    new_pw = _gen_password()
+    ph = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
+    with _con() as con:
+        con.execute("UPDATE users SET password_hash=? WHERE id=?", (ph, user["id"]))
+        con.commit()
+
+    body = f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;
+                background:#0f1525;color:#e2e8f0;border-radius:12px;">
+      <h2 style="color:#3b82f6;margin:0 0 16px">Mantra Trading</h2>
+      <p>Вы запросили сброс пароля.</p>
+      <p>Ваш новый пароль:</p>
+      <div style="font-family:monospace;font-size:22px;font-weight:700;
+                  background:#131929;border:1px solid #1e2d45;border-radius:8px;
+                  padding:14px 20px;letter-spacing:2px;margin:16px 0;">
+        {new_pw}
+      </div>
+      <p style="color:#64748b;font-size:13px;">
+        Войдите и смените пароль в настройках аккаунта.<br>
+        Если вы не запрашивали сброс — просто проигнорируйте это письмо.
+      </p>
+    </div>
+    """
+    _send_email(email, "Mantra Trading — новый пароль", body)
+    return _mask_email(email)
+
+
+def _mask_email(email: str) -> str:
+    parts = email.split("@")
+    if len(parts) != 2:
+        return "***"
+    name, domain = parts
+    return name[:2] + "***@" + domain
 
 
 def delete_user(user_id: int) -> None:

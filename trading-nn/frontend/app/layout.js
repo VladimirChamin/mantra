@@ -1,14 +1,33 @@
 import "./globals.css";
+import PWARegister from "./pwa";
 
 export const metadata = {
-  title: "Нейротерминал — управление торговой нейросетью",
-  description: "Обучение, walk-forward тестирование и сигналы нейросети на TensorFlow",
+  title: "Mantra Terminal — нейросетевые сигналы",
+  description: "Обучение, walk-forward тестирование и торговые сигналы нейросети на TensorFlow",
+  manifest: "/manifest.json",
+  themeColor: "#5b8def",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Mantra",
+  },
+  viewport: {
+    width: "device-width",
+    initialScale: 1,
+    maximumScale: 1,
+  },
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="ru">
       <head>
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Mantra" />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#5b8def" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
@@ -16,7 +35,7 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body><PWARegister />{children}</body>
     </html>
   );
 }
