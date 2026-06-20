@@ -1040,9 +1040,10 @@ def train_universal(symbols: list[str], interval: str = "1d",
         cfg_i = make_config(sym, interval, epochs=epochs, model_dir=model_dir)
         try:
             df = load_ohlcv(cfg_i)
-            index_df_i = _try_load_index(sym, interval)
-            htf_df_i   = _make_htf_summary(df, interval) if interval in ("1h", "4h", "1d") else None
-            data, scaler_i = build_dataset(df, cfg_i, index_df=index_df_i, htf_df=htf_df_i)
+            # В universal-режиме НЕ используем index_df (RS у каждого инструмента
+            # свой и ломает согласованность фич), HTF строим из тех же данных.
+            htf_df_i = _make_htf_summary(df, interval) if interval in ("1h", "4h", "1d") else None
+            data, scaler_i = build_dataset(df, cfg_i, index_df=None, htf_df=htf_df_i)
         except Exception as e:
             _log(f"[universal] {sym} пропущен: {e}")
             continue
@@ -1051,7 +1052,11 @@ def train_universal(symbols: list[str], interval: str = "1d",
             feature_cols = data["feature_cols"]
             cfg_proto.feature_cols = feature_cols
         elif data["feature_cols"] != feature_cols:
-            _log(f"[universal] {sym} — несовпадение фич, пропускаем")
+            # Диагностика: покажем какие фичи отличаются
+            missing = [f for f in feature_cols if f not in data["feature_cols"]]
+            extra   = [f for f in data["feature_cols"] if f not in feature_cols]
+            _log(f"[universal] {sym} — несовпадение фич: "
+                 f"missing={missing[:5]}, extra={extra[:5]}, пропускаем")
             continue
 
         scalers[sym] = scaler_i
