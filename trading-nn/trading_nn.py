@@ -455,6 +455,19 @@ def add_features(df: pd.DataFrame, interval: str = "1d",
     rs    = gain / (loss + 1e-9)
     out["rsi"] = 100 - 100 / (1 + rs)
 
+    # ── Stochastic RSI(14,3,3) ─────────────────────────────────────────────────
+    rsi_s      = out["rsi"]
+    rsi_min14  = rsi_s.rolling(14).min()
+    rsi_max14  = rsi_s.rolling(14).max()
+    stoch_rsi_k = (rsi_s - rsi_min14) / (rsi_max14 - rsi_min14 + 1e-9)
+    out["stoch_rsi_k"] = stoch_rsi_k.rolling(3).mean()          # %K сглаженный
+    out["stoch_rsi_d"] = out["stoch_rsi_k"].rolling(3).mean()   # %D (сигнальная)
+
+    # ── Williams %R(14) ────────────────────────────────────────────────────────
+    hh14 = h.rolling(14).max()
+    ll14 = l.rolling(14).min()
+    out["williams_r"] = (hh14 - c) / (hh14 - ll14 + 1e-9) * -100   # [-100, 0]
+
     # ── ATR(14) ────────────────────────────────────────────────────────────────
     tr       = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     atr      = tr.rolling(14).mean()
@@ -466,9 +479,23 @@ def add_features(df: pd.DataFrame, interval: str = "1d",
     sd  = c.rolling(20).std()
     out["boll_b"] = (c - (mid - 2 * sd)) / (4 * sd + 1e-9)
 
+    # ── Donchian Channel(20): позиция цены в канале ────────────────────────────
+    don_h20 = h.rolling(20).max()
+    don_l20 = l.rolling(20).min()
+    out["donchian_pos"]   = (c - don_l20) / (don_h20 - don_l20 + 1e-9)   # [0,1]
+    out["donchian_width"] = (don_h20 - don_l20) / (c + 1e-9)              # ширина канала / цена
+
+    # ── Close position in bar ──────────────────────────────────────────────────
+    out["close_pos"] = (c - l) / (h - l + 1e-9)   # [0,1]: 0=закрылись у низа, 1=у верха
+
     # ── объёмные фичи ──────────────────────────────────────────────────────────
     out["vol_chg"] = v.pct_change()
     out["vol_z"]   = (v - v.rolling(20).mean()) / (v.rolling(20).std() + 1e-9)
+
+    # ── OBV (On-Balance Volume) ────────────────────────────────────────────────
+    obv = (np.sign(c.diff()) * v).fillna(0).cumsum()
+    out["obv_z"] = (obv - obv.rolling(20).mean()) / (obv.rolling(20).std() + 1e-9)
+    out["obv_slope"] = obv.diff(5) / (obv.abs().rolling(5).mean() + 1e-9)
 
     # ── GARCH/HAR-RV фичи ──────────────────────────────────────────────────────
     out = add_vol_features(out, interval=interval)
