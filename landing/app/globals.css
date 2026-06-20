@@ -88,6 +88,67 @@ a:hover { text-decoration: underline; }
 .stat-num { font-size: 32px; font-weight: 800; color: var(--accent); }
 .stat-label { font-size: 13px; color: var(--muted); margin-top: 4px; text-align: center; }
 
+/* hero extras */
+.hero-badge {
+  display: inline-block; margin-bottom: 18px;
+  padding: 5px 14px; border-radius: 20px;
+  border: 1px solid var(--accent); color: var(--accent);
+  font-size: 13px; font-weight: 500; letter-spacing: 0.05em;
+}
+.hero-note { margin-top: 18px; font-size: 13px; color: var(--muted); }
+.stat-item { text-align: center; }
+
+/* about */
+.about { padding: 80px 0; background: var(--bg2); }
+.about-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 48px; align-items: start;
+}
+.about-eyebrow {
+  display: block; font-size: 12px; font-weight: 600; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 12px;
+}
+.about-text h2 { font-size: 28px; font-weight: 700; margin-bottom: 16px; }
+.about-text p { color: var(--muted2); font-size: 14px; line-height: 1.75; margin-bottom: 14px; }
+.about-cards { display: flex; flex-direction: column; gap: 12px; }
+.about-card {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px 18px;
+}
+.about-card:hover { border-color: var(--accent); }
+.about-card-icon { font-size: 24px; flex-shrink: 0; }
+.about-card-label { font-size: 14px; font-weight: 600; }
+.about-card-desc { font-size: 12px; color: var(--muted2); margin-top: 2px; }
+
+/* how it works */
+.howto { padding: 80px 0; }
+.steps {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 20px; margin-top: 40px;
+}
+.step {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 14px; padding: 24px;
+}
+.step-num {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 15px; margin-bottom: 14px;
+}
+.step-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.step-desc { color: var(--muted2); font-size: 13px; line-height: 1.65; }
+
+/* CTA section */
+.cta {
+  padding: 80px 24px; text-align: center;
+  background: radial-gradient(ellipse 60% 80% at 50% 50%, rgba(59,130,246,.12), transparent);
+}
+.cta h2 { font-size: 32px; font-weight: 700; margin-bottom: 10px; }
+.cta p { color: var(--muted2); font-size: 16px; margin-bottom: 32px; }
+.cta-btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+
 /* features */
 .features { padding: 80px 24px; }
 .section-title { text-align: center; font-size: 32px; font-weight: 700; margin-bottom: 8px; }
@@ -192,6 +253,11 @@ a:hover { text-decoration: underline; }
 /* ═══════════════════════════════════════
    MOBILE / RESPONSIVE
    ═══════════════════════════════════════ */
+@media (max-width: 900px) {
+  .steps { grid-template-columns: repeat(2, 1fr); }
+  .about-grid { grid-template-columns: 1fr; gap: 32px; }
+}
+
 @media (max-width: 640px) {
   /* nav */
   .nav { padding: 0 16px; height: 54px; }
@@ -214,6 +280,14 @@ a:hover { text-decoration: underline; }
   .features { padding: 48px 16px; }
   .section-title { font-size: 24px; }
   .features-grid { grid-template-columns: 1fr; }
+
+  /* about / howto */
+  .about { padding: 48px 0; }
+  .howto { padding: 48px 0; }
+  .steps { grid-template-columns: 1fr; gap: 12px; }
+  .cta { padding: 48px 16px; }
+  .cta h2 { font-size: 24px; }
+  .cta-btns { flex-direction: column; align-items: stretch; }
 
   /* plans */
   .plans { padding: 48px 16px; }

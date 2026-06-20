@@ -5,17 +5,13 @@ export const metadata = {
   title: "Mantra Terminal — нейросетевые сигналы",
   description: "Обучение, walk-forward тестирование и торговые сигналы нейросети на TensorFlow",
   manifest: "/manifest.json",
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
   themeColor: "#5b8def",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "Mantra",
-  },
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-    maximumScale: 1,
-  },
 };
 
 export default function RootLayout({ children }) {
@@ -27,7 +23,6 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Mantra" />
         <link rel="manifest" href="/manifest.json" />
-        <meta name="theme-color" content="#5b8def" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
