@@ -1251,9 +1251,7 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         elif (1 - p_up) >= cfg.prob_threshold and fwd_ret < 0:
             direction = "SHORT"
 
-    # Прибыль/Риск = потенциальная прибыль / потенциальный убыток
     raw_rr = tp_dist / (sl_dist + 1e-9)
-    exp_rr = round(raw_rr, 2)
 
     if direction != "FLAT" and raw_rr < cfg.min_rr:
         direction = "FLAT"
@@ -1270,6 +1268,11 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
     else:
         entry = price + offset * atr_clamped if offset > 0 else price
         sl = tp = price
+
+    # Прибыль/Риск = |TP - entry| / |entry - SL|
+    if direction in ("LONG", "SHORT"):
+        exp_rr = round(abs(tp - entry) / (abs(entry - sl) + 1e-9), 2)
+    else:
         exp_rr = 0.0
 
     # дедлайн исполнения ордера (горизонт в барах от текущего момента)
