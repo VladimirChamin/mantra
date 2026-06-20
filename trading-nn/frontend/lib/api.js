@@ -50,4 +50,20 @@ export const api = {
   aiQuota: () => req("/api/ai_quota"),
   analysis: (payload) =>
     req("/api/analysis", { method: "POST", body: JSON.stringify(payload) }),
+  changePassword: (payload) =>
+    req("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
+  // Подписки на сигналы
+  getSubscriptions: () => req("/api/subscriptions"),
+  addSubscription: (payload) =>
+    req("/api/subscriptions", { method: "POST", body: JSON.stringify(payload) }),
+  deleteSubscription: (id) =>
+    req(`/api/subscriptions/${id}`, { method: "DELETE" }),
+  toggleSubscription: (id, active) =>
+    req(`/api/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
+  // Переобучение по расписанию (admin)
+  getRetrainHistory: () => req("/api/retrain/history"),
+  saveRetrainSchedules: (schedules) =>
+    req("/api/retrain/schedules", { method: "POST", body: JSON.stringify({ schedules }) }),
+  triggerRetrain: (interval) =>
+    req("/api/retrain/trigger", { method: "POST", body: JSON.stringify({ interval }) }),
 };

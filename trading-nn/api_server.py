@@ -49,6 +49,7 @@ import walkforward as wf
 import volatility as vol_module
 import auth
 import ai_analysis as ai_mod
+import subscriptions as subs_mod
 
 app = FastAPI(title="Trading NN Control API", version="1.0")
 
@@ -61,6 +62,17 @@ app.add_middleware(
 
 # инициализируем БД при старте
 auth.init_db()
+subs_mod.init_subscriptions_db()
+
+
+def _forecast_for_sub(symbol: str, interval: str) -> dict:
+    """Вызывается из фонового сканера подписок."""
+    cfg = tn.make_config(symbol, interval)
+    return tn.forecast(cfg, steps=5, history=50)
+
+
+subs_mod.set_forecast_fn(_forecast_for_sub)
+subs_mod.start_scanner()
 
 # текущий источник данных (для отображения в UI)
 import os as _os
@@ -613,6 +625,136 @@ def job(jid: str):
     if not j:
         raise HTTPException(404, "Задача не найдена")
     return j
+
+
+# =============================================================================
+# Смена пароля
+# =============================================================================
+class ChangePasswordReq(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/auth/change-password", tags=["auth"])
+def change_password(req: ChangePasswordReq, current_user: dict = Depends(auth.get_current_user)):
+    if not auth.verify_password(req.current_password, current_user["password_hash"]):
+        raise HTTPException(400, "Неверный текущий пароль")
+    if len(req.new_password) < 6:
+        raise HTTPException(400, "Новый пароль должен быть не короче 6 символов")
+    import bcrypt
+    ph = bcrypt.hashpw(req.new_password.encode(), bcrypt.gensalt()).decode()
+    with auth._con() as con:
+        con.execute("UPDATE users SET password_hash=? WHERE id=?", (ph, current_user["id"]))
+        con.commit()
+    return {"ok": True, "message": "Пароль успешно изменён"}
+
+
+# =============================================================================
+# Подписки на сигналы
+# =============================================================================
+class SubscriptionReq(BaseModel):
+    symbol: str
+    interval: str = "1d"
+    channel: str = "telegram"
+    destination: str
+    direction_filter: str = "any"
+    min_prob: float = 0.55
+
+
+class ToggleSubReq(BaseModel):
+    active: bool
+
+
+@app.get("/api/subscriptions", tags=["subscriptions"])
+def get_subscriptions(current_user: dict = Depends(auth.get_current_user)):
+    return {"subscriptions": subs_mod.list_subscriptions(current_user["id"])}
+
+
+@app.post("/api/subscriptions", tags=["subscriptions"])
+def add_subscription(req: SubscriptionReq, current_user: dict = Depends(auth.get_current_user)):
+    try:
+        sub = subs_mod.create_subscription(current_user["id"], req.model_dump())
+        return sub
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/subscriptions/{sub_id}", tags=["subscriptions"])
+def remove_subscription(sub_id: int, current_user: dict = Depends(auth.get_current_user)):
+    ok = subs_mod.delete_subscription(sub_id, current_user["id"])
+    if not ok:
+        raise HTTPException(404, "Подписка не найдена")
+    return {"ok": True}
+
+
+@app.patch("/api/subscriptions/{sub_id}", tags=["subscriptions"])
+def patch_subscription(sub_id: int, req: ToggleSubReq, current_user: dict = Depends(auth.get_current_user)):
+    sub = subs_mod.toggle_subscription(sub_id, current_user["id"], req.active)
+    if not sub:
+        raise HTTPException(404, "Подписка не найдена")
+    return sub
+
+
+# =============================================================================
+# Расписание переобучения (admin)
+# =============================================================================
+class RetrainSchedulesReq(BaseModel):
+    schedules: list[dict]
+
+
+class RetrainTriggerReq(BaseModel):
+    interval: str = "1d"
+    asset_class: Optional[str] = None
+
+
+@app.get("/api/retrain/schedules", tags=["retrain"])
+def get_retrain_schedules(_=Depends(auth.require_admin)):
+    return {"schedules": subs_mod.get_retrain_schedules()}
+
+
+@app.post("/api/retrain/schedules", tags=["retrain"])
+def save_retrain_schedules(req: RetrainSchedulesReq, _=Depends(auth.require_admin)):
+    subs_mod.save_retrain_schedules(req.schedules)
+    return {"ok": True}
+
+
+@app.get("/api/retrain/history", tags=["retrain"])
+def retrain_history(_=Depends(auth.require_admin)):
+    return {"history": subs_mod.get_retrain_history()}
+
+
+@app.post("/api/retrain/trigger", tags=["retrain"])
+def trigger_retrain(req: RetrainTriggerReq, _=Depends(auth.require_admin)):
+    """Немедленно запускает переобучение модели для заданного таймфрейма."""
+    interval = req.interval
+    asset_class = req.asset_class or "stocks"
+
+    # Берём символы из ASSET_CLASS_META
+    meta = tn.ASSET_CLASS_META.get(asset_class.lower(), {})
+    symbols = meta.get("default_symbols", [])
+    symbols_str = " ".join(symbols) if symbols else asset_class
+
+    train_req = TrainUniversalReq(
+        symbols=symbols,
+        asset_class=asset_class,
+        interval=interval,
+        epochs=20,
+    )
+    jid = JOBS.create("train_universal", train_req.model_dump())
+
+    history_id = subs_mod.log_retrain(
+        interval=interval, status="running",
+        triggered_by="manual", job_id=jid,
+        asset_class=asset_class, symbols=symbols_str
+    )
+
+    def _wrapped():
+        _do_train_universal(jid, train_req)
+        final_status = JOBS.get(jid).get("status", "done")
+        subs_mod.update_retrain_status(history_id, final_status)
+
+    _run_async(_wrapped)
+    return {"job_id": jid, "history_id": history_id}
 
 
 if __name__ == "__main__":

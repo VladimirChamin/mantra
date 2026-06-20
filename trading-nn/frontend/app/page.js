@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { getUser, logout } from "@/lib/auth";
+import Link from "next/link";
 import SignalTicket from "@/components/SignalTicket";
 import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
@@ -10,6 +11,9 @@ import EquityChart from "@/components/EquityChart";
 import JobLog from "@/components/JobLog";
 import AIAnalysis from "@/components/AIAnalysis";
 import AdminPanel from "@/components/AdminPanel";
+import Screener from "@/components/Screener";
+import Subscriptions from "@/components/Subscriptions";
+import RetrainingPanel from "@/components/RetrainingPanel";
 
 const DEFAULT_INTERVALS = ["1d", "4h", "1h"];
 
@@ -231,18 +235,21 @@ export default function Dashboard() {
           </span>
           {currentUser && (
             <span style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
-              <span style={{ fontSize: 12, opacity: 0.7 }}>
-                {currentUser.name || currentUser.email}
+              <Link href="/profile" style={{
+                fontSize: 12, color: "var(--muted)", textDecoration: "none",
+                display: "flex", alignItems: "center", gap: 5,
+              }}>
+                <span>{currentUser.name || currentUser.email}</span>
                 <span style={{
-                  marginLeft: 5, fontSize: 10, padding: "1px 6px",
-                  borderRadius: 4, background: isAdmin ? "var(--accent)" : "var(--border)",
-                  color: isAdmin ? "#fff" : "var(--muted2)", verticalAlign: "middle",
+                  fontSize: 10, padding: "1px 6px",
+                  borderRadius: 4, background: isAdmin ? "var(--primary)" : "var(--line)",
+                  color: isAdmin ? "#fff" : "var(--muted)", verticalAlign: "middle",
                 }}>{isAdmin ? "admin" : "user"}</span>
-              </span>
+              </Link>
               <button onClick={logout} style={{
                 fontSize: 11, padding: "3px 10px", borderRadius: 5,
-                border: "1px solid var(--border)", background: "transparent",
-                color: "var(--muted2)", cursor: "pointer",
+                border: "1px solid var(--line)", background: "transparent",
+                color: "var(--muted)", cursor: "pointer",
               }}>Выход</button>
             </span>
           )}
@@ -251,8 +258,21 @@ export default function Dashboard() {
 
       <div className="tabs">
         {(isAdmin
-          ? [["train", "Обучение"], ["classes", "Классы активов"], ["backtest", "Walk-forward"], ["signal", "Сигнал"], ["admin", "Админка"]]
-          : [["signal", "Сигнал"]]
+          ? [
+              ["train", "Обучение"],
+              ["classes", "Классы активов"],
+              ["backtest", "Walk-forward"],
+              ["signal", "Сигнал"],
+              ["screener", "Скриннер"],
+              ["subscriptions", "Подписки"],
+              ["retrain", "Расписание"],
+              ["admin", "Админка"],
+            ]
+          : [
+              ["signal", "Сигнал"],
+              ["screener", "Скриннер"],
+              ["subscriptions", "Подписки"],
+            ]
         ).map(([k, label]) => (
           <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
             {label}
@@ -518,6 +538,18 @@ export default function Dashboard() {
           </p>
           <AdminPanel currentUserId={currentUser?.id} />
         </div>
+      )}
+
+      {tab === "screener" && (
+        <Screener />
+      )}
+
+      {tab === "subscriptions" && (
+        <Subscriptions />
+      )}
+
+      {tab === "retrain" && isAdmin && (
+        <RetrainingPanel />
       )}
 
       {tab === "signal" && (
