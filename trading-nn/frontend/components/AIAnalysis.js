@@ -81,6 +81,56 @@ function TagList({ items, color }) {
   );
 }
 
+// ─── On-Chain блок ────────────────────────────────────────────────────────────
+function fmtLarge(n) {
+  if (n == null) return "н/д";
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return String(n);
+}
+
+function OnChainBlock({ onchain }) {
+  if (!onchain) return null;
+  const m   = onchain.market      || {};
+  const der = onchain.derivatives || {};
+  const ls  = onchain.long_short  || {};
+  const nf  = onchain.netflow     || {};
+
+  const rows = [
+    m.market_cap_usd       && ["Рыночная капитализация", fmtLarge(m.market_cap_usd)],
+    m.total_volume_24h     && ["Объём 24ч", fmtLarge(m.total_volume_24h)],
+    m.price_change_24h_pct != null && ["Изм. цены 24ч", `${m.price_change_24h_pct.toFixed(2)}%`, m.price_change_24h_pct >= 0 ? "var(--long)" : "var(--short)"],
+    m.price_change_7d_pct  != null && ["Изм. цены 7д",  `${m.price_change_7d_pct.toFixed(2)}%`,  m.price_change_7d_pct  >= 0 ? "var(--long)" : "var(--short)"],
+    m.ath_change_pct       != null && ["От ATH", `${m.ath_change_pct.toFixed(1)}%`, "var(--muted)"],
+    der.open_interest_usd  && ["Open Interest", fmtLarge(der.open_interest_usd)],
+    der.funding_rate_avg   != null && ["Funding Rate", `${der.funding_rate_avg > 0 ? "+" : ""}${der.funding_rate_avg}%`, der.funding_rate_avg < 0 ? "var(--short)" : der.funding_rate_avg > 0.02 ? "var(--long)" : "var(--muted)"],
+    ls.long_short_ratio    && ["Long/Short Ratio", `${ls.long_short_ratio} (L ${ls.long_pct}% / S ${ls.short_pct}%)`],
+    nf.active_addresses_24h && ["Акт. адресов 24ч", Number(nf.active_addresses_24h).toLocaleString("ru-RU")],
+    nf.tx_count_24h        && ["Транзакций 24ч", Number(nf.tx_count_24h).toLocaleString("ru-RU")],
+    nf.avg_fee_usd         && ["Ср. комиссия", `$${nf.avg_fee_usd}`],
+  ].filter(Boolean);
+
+  if (!rows.length) return null;
+
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+      gap: 8, marginTop: 6,
+    }}>
+      {rows.map(([k, v, color]) => (
+        <div key={k} style={{
+          background: "var(--ink-2)", border: "1px solid var(--line)",
+          borderRadius: 8, padding: "8px 12px",
+        }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>{k}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--mono)", color: color || "var(--text)" }}>{v}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── COT индикатор ────────────────────────────────────────────────────────────
 function CotBar({ cot }) {
   if (!cot) return null;
@@ -288,6 +338,18 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
               {v.macro_summary && (
                 <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0, opacity: 0.85 }}>
                   {v.macro_summary}
+                </p>
+              )}
+            </Section>
+          )}
+
+          {/* On-Chain (только для крипто) */}
+          {result.onchain && (
+            <Section title="On-Chain данные">
+              <OnChainBlock onchain={result.onchain} />
+              {v.onchain_summary && (
+                <p style={{ fontSize: 13, lineHeight: 1.6, margin: "10px 0 0", opacity: 0.85 }}>
+                  {v.onchain_summary}
                 </p>
               )}
             </Section>

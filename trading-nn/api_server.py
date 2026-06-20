@@ -74,10 +74,87 @@ def _forecast_for_sub(symbol: str, interval: str) -> dict:
 subs_mod.set_forecast_fn(_forecast_for_sub)
 subs_mod.start_scanner()
 
-# текущий источник данных (для отображения в UI)
-import os as _os
-_tinvest_auto = bool(_os.environ.get("TINVEST_TOKEN", "").strip())
-_STATE = {"data_source": "tinvest" if _tinvest_auto else "none"}
+# Активируем мультироутер: crypto→Bybit, stocks→T-Invest/yfinance, forex/commodity→yfinance
+import multi_loader as _ml
+_ml.activate()
+_STATE = {"data_source": "auto"}
+
+# =============================================================================
+# Монитор качества моделей (AUC watchdog)
+# =============================================================================
+_AUC_MONITOR = {
+    "enabled":          False,
+    "interval_hours":   6,          # как часто проверять
+    "warn_threshold":   tn.AUC_THRESHOLD_WARN,      # 0.54 — жёлтый
+    "retrain_threshold": tn.AUC_THRESHOLD_RETRAIN,  # 0.52 — красный + retrain
+    "auto_retrain":     True,
+    "last_check":       None,
+    "last_triggered":   [],         # теги моделей, которые были дообучены
+}
+_AUC_MONITOR_LOCK = threading.Lock()
+_AUC_MONITOR_THREAD: threading.Thread | None = None
+
+
+def _auc_monitor_loop():
+    """Фоновый поток: периодически проверяет AUC всех моделей."""
+    import time
+    while True:
+        with _AUC_MONITOR_LOCK:
+            cfg = dict(_AUC_MONITOR)
+
+        if not cfg["enabled"]:
+            time.sleep(60)
+            continue
+
+        interval_sec = max(cfg["interval_hours"], 1) * 3600
+        time.sleep(interval_sec)
+
+        _run_auc_check(cfg)
+
+
+def _run_auc_check(cfg: dict | None = None):
+    """Пересчитывает AUC всех моделей и запускает retrain для упавших."""
+    if cfg is None:
+        with _AUC_MONITOR_LOCK:
+            cfg = dict(_AUC_MONITOR)
+
+    triggered = []
+    all_metrics = tn.get_all_metrics()
+    for m in all_metrics:
+        tag = m["tag"]
+        try:
+            fresh = tn.refresh_model_metrics(tag)
+            auc   = fresh.get("val_auc")
+            if auc is None:
+                continue
+
+            with _AUC_MONITOR_LOCK:
+                _AUC_MONITOR["last_check"] = datetime.now().isoformat(timespec="seconds")
+
+            if cfg["auto_retrain"] and auc < cfg["retrain_threshold"]:
+                # запускаем дообучение как фоновую задачу
+                parts = tag.rsplit("_", 1)
+                if len(parts) == 2:
+                    symbol, interval = parts
+                    req = TrainReq(symbol=symbol, interval=interval, warm_start=True, epochs=40)
+                    jid = JOBS.create("train", req.model_dump())
+                    _run_async(_do_train, jid, req)
+                    triggered.append({"tag": tag, "auc": auc, "job_id": jid})
+                    print(f"[auc_monitor] AUC {tag}={auc:.4f} < {cfg['retrain_threshold']} → retrain jid={jid}")
+        except Exception as e:
+            print(f"[auc_monitor] {tag}: {e}")
+
+    if triggered:
+        with _AUC_MONITOR_LOCK:
+            _AUC_MONITOR["last_triggered"] = triggered
+
+
+def _ensure_monitor_thread():
+    global _AUC_MONITOR_THREAD
+    if _AUC_MONITOR_THREAD is None or not _AUC_MONITOR_THREAD.is_alive():
+        _AUC_MONITOR_THREAD = threading.Thread(
+            target=_auc_monitor_loop, daemon=True, name="auc-monitor")
+        _AUC_MONITOR_THREAD.start()
 
 
 # =============================================================================
@@ -86,6 +163,7 @@ _STATE = {"data_source": "tinvest" if _tinvest_auto else "none"}
 class JobManager:
     def __init__(self):
         self.jobs: dict[str, dict] = {}
+        self._cancel_flags: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
 
     def create(self, kind: str, params: dict) -> str:
@@ -96,6 +174,7 @@ class JobManager:
                 "progress": 0.0, "logs": [], "result": None, "error": None,
                 "params": params, "created": datetime.now().isoformat(timespec="seconds"),
             }
+            self._cancel_flags[jid] = threading.Event()
         return jid
 
     def update(self, jid: str, **kw):
@@ -116,6 +195,21 @@ class JobManager:
     def list(self) -> list:
         with self.lock:
             return sorted(self.jobs.values(), key=lambda j: j["created"], reverse=True)
+
+    def cancel(self, jid: str) -> bool:
+        """Устанавливает флаг отмены. Возвращает False если задача не найдена или уже завершена."""
+        with self.lock:
+            job = self.jobs.get(jid)
+            if not job or job["status"] in ("done", "error", "cancelled"):
+                return False
+            self._cancel_flags[jid].set()
+            job["status"] = "cancelling"
+        return True
+
+    def is_cancelled(self, jid: str) -> bool:
+        with self.lock:
+            ev = self._cancel_flags.get(jid)
+        return ev.is_set() if ev else False
 
 
 JOBS = JobManager()
@@ -194,6 +288,12 @@ class TrainUniversalReq(BaseModel):
     epochs: int = 40
 
 
+class FeatureImportanceReq(BaseModel):
+    symbol: str = "IMOEX"
+    interval: str = "1d"
+    n_repeats: int = 3
+
+
 class AnalysisReq(BaseModel):
     symbol: str
     interval: str = "1d"
@@ -202,16 +302,22 @@ class AnalysisReq(BaseModel):
     company_hint: str = ""
 
 
-class DataSourceReq(BaseModel):
-    provider: str = "yfinance"           # 'yfinance' | 'tinvest' | 'bybit' | 'financialdata'
-    token: Optional[str] = None          # T-Invest token
-    api_key: Optional[str] = None        # FinancialData API key
-    category: Optional[str] = "spot"    # Bybit: spot | linear | inverse
-
-
 # =============================================================================
 # Фоновые исполнители
 # =============================================================================
+def _make_stop_callback(jid: str, total_epochs: int):
+    """Keras callback: проверяет флаг отмены после каждой эпохи."""
+    class _StopCB(tf.keras.callbacks.Callback):
+        def on_epoch_end(self, epoch, logs=None):
+            logs = logs or {}
+            JOBS.update(jid, progress=round((epoch + 1) / max(total_epochs, 1), 3))
+            JOBS.log(jid, f"эпоха {epoch + 1}/{total_epochs} "
+                          f"val_loss={logs.get('val_loss', float('nan')):.4f}")
+            if JOBS.is_cancelled(jid):
+                self.model.stop_training = True
+    return _StopCB()
+
+
 def _do_train(jid: str, req: TrainReq):
     JOBS.update(jid, status="running")
     JOBS.log(jid, f"Обучение {req.symbol} {req.interval}, эпох={req.epochs}")
@@ -220,15 +326,14 @@ def _do_train(jid: str, req: TrainReq):
                              epochs=req.epochs, horizon=req.horizon, lookback=req.lookback)
         JOBS.log(jid, f"горизонт={cfg.horizon} окно={cfg.lookback} история={cfg.period}")
 
-        class ProgressCB(tf.keras.callbacks.Callback):
-            def on_epoch_end(self, epoch, logs=None):
-                logs = logs or {}
-                JOBS.update(jid, progress=round((epoch + 1) / max(req.epochs, 1), 3))
-                JOBS.log(jid, f"эпоха {epoch + 1}/{req.epochs} "
-                              f"val_loss={logs.get('val_loss', float('nan')):.4f}")
+        tn.train(cfg, warm_start=req.warm_start,
+                 extra_callbacks=[_make_stop_callback(jid, req.epochs)])
 
-        tn.train(cfg, warm_start=req.warm_start, extra_callbacks=[ProgressCB()])
-        # сразу выдаём пробный сигнал
+        if JOBS.is_cancelled(jid):
+            JOBS.update(jid, status="cancelled", progress=JOBS.get(jid)["progress"])
+            JOBS.log(jid, "Обучение остановлено пользователем")
+            return
+
         signal = tn.predict_signal(cfg)
         JOBS.update(jid, status="done", progress=1.0,
                     result={"message": "Модель обучена и сохранена", "signal": signal})
@@ -244,13 +349,6 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
     JOBS.log(jid, f"Универсальное обучение: {len(req.symbols)} инструментов, "
                   f"интервал={req.interval}, эпох={req.epochs}")
     try:
-        class ProgressCB(tf.keras.callbacks.Callback):
-            def on_epoch_end(self, epoch, logs=None):
-                logs = logs or {}
-                JOBS.update(jid, progress=round((epoch + 1) / max(req.epochs, 1), 3))
-                JOBS.log(jid, f"эпоха {epoch + 1}/{req.epochs} "
-                              f"val_loss={logs.get('val_loss', float('nan')):.4f}")
-
         asset_class = req.asset_class.upper()
         symbols = req.symbols or tn.ASSET_CLASS_META.get(
             req.asset_class.lower(), {}).get("default_symbols", [])
@@ -259,12 +357,37 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             interval=req.interval,
             epochs=req.epochs,
             asset_class=asset_class,
-            extra_callbacks=[ProgressCB()],
+            extra_callbacks=[_make_stop_callback(jid, req.epochs)],
             log_fn=lambda msg: JOBS.log(jid, msg),
         )
+
+        if JOBS.is_cancelled(jid):
+            JOBS.update(jid, status="cancelled", progress=JOBS.get(jid)["progress"])
+            JOBS.log(jid, "Обучение остановлено пользователем")
+            return
+
         JOBS.update(jid, status="done", progress=1.0,
                     result={"message": f"Модель класса {asset_class} обучена на {len(symbols)} инструментах",
                             "asset_class": asset_class, "symbols": symbols, "interval": req.interval})
+        JOBS.log(jid, "Готово")
+    except Exception as e:
+        JOBS.update(jid, status="error", error=str(e))
+        JOBS.log(jid, f"ОШИБКА: {e}")
+        traceback.print_exc()
+
+
+def _do_feature_importance(jid: str, req: FeatureImportanceReq):
+    JOBS.update(jid, status="running")
+    JOBS.log(jid, f"Feature importance {req.symbol} {req.interval}, повторений={req.n_repeats}")
+    try:
+        cfg = tn.make_config(req.symbol, req.interval)
+        JOBS.log(jid, "Загружаю данные и модель…")
+        results = tn.compute_feature_importance(cfg, n_repeats=req.n_repeats)
+        top10 = results[:10]
+        JOBS.log(jid, "Топ-10 признаков: " +
+                 ", ".join(f"{r['feature']} ({r['importance']:+.4f})" for r in top10))
+        JOBS.update(jid, status="done", progress=1.0,
+                    result={"features": results, "top10": top10})
         JOBS.log(jid, "Готово")
     except Exception as e:
         JOBS.update(jid, status="error", error=str(e))
@@ -286,11 +409,18 @@ def _do_backtest(jid: str, req: BacktestReq):
         def progress(frac, msg):
             JOBS.update(jid, progress=round(float(frac), 3))
             JOBS.log(jid, msg)
+            return JOBS.is_cancelled(jid)  # True = попросить walk_forward прерваться
 
         res = wf.walk_forward(cfg, train_bars=train_bars, test_bars=test_bars,
                               epochs=req.epochs, anchored=req.anchored,
                               commission=req.commission, slippage=req.slippage,
                               on_progress=progress)
+
+        if JOBS.is_cancelled(jid):
+            JOBS.update(jid, status="cancelled", progress=JOBS.get(jid)["progress"])
+            JOBS.log(jid, "Walk-forward остановлен пользователем")
+            return
+
         JOBS.update(jid, status="done", progress=1.0, result=res)
         JOBS.log(jid, f"Готово: сделок {res['overall']['n_trades']}, "
                       f"доходность {res['overall']['total_return']*100:.1f}%")
@@ -396,6 +526,60 @@ def all_signals(user: dict = Depends(auth.require_admin)):
     return {"signals": auth.get_all_signals()}
 
 
+@app.delete("/api/signals/{signal_id}", tags=["signals"])
+def delete_signal(signal_id: int, user: dict = Depends(auth.get_current_user)):
+    ok = auth.delete_signal(signal_id, user["id"])
+    if not ok:
+        raise HTTPException(404, "Сигнал не найден")
+    return {"ok": True}
+
+
+class AdminTokensReq(BaseModel):
+    tinvest_token: Optional[str] = None
+    fd_key: Optional[str] = None
+
+@app.get("/api/admin/tokens")
+def get_admin_tokens(user: dict = Depends(auth.require_admin)):
+    return {
+        "tinvest_token_set": bool(os.environ.get("TINVEST_TOKEN", "").strip()),
+        "fd_key_set": bool(os.environ.get("FINANCIALDATA_API_KEY", "").strip()),
+    }
+
+@app.post("/api/admin/tokens")
+def set_admin_tokens(req: AdminTokensReq, user: dict = Depends(auth.require_admin)):
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    # читаем .env
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+
+    def set_env_var(lines, key, value):
+        new_line = f"{key}={value}\n"
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}="):
+                lines[i] = new_line
+                return lines
+        lines.append(new_line)
+        return lines
+
+    if req.tinvest_token:
+        os.environ["TINVEST_TOKEN"] = req.tinvest_token
+        lines = set_env_var(lines, "TINVEST_TOKEN", req.tinvest_token)
+        import multi_loader as _ml
+        _ml.activate()  # перерегистрируем с новым токеном
+
+    if req.fd_key:
+        os.environ["FINANCIALDATA_API_KEY"] = req.fd_key
+        lines = set_env_var(lines, "FINANCIALDATA_API_KEY", req.fd_key)
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    return {"ok": True}
+
+
 @app.get("/api/health")
 def health():
     models = _list_models()
@@ -470,40 +654,6 @@ def detect_asset_class_for_symbol(symbol: str):
     }
 
 
-@app.post("/api/datasource")
-def set_datasource(req: DataSourceReq):
-    if req.provider == "tinvest":
-        import tinvest_loader
-        token = req.token or os.environ.get("TINVEST_TOKEN")
-        if not token:
-            raise HTTPException(400, "Не задан токен T-Invest")
-        tinvest_loader.use_tinvest(token)
-        _STATE["data_source"] = "tinvest"
-
-    elif req.provider == "bybit":
-        import bybit_loader
-        category = req.category or "spot"
-        bybit_loader.use_bybit(category=category)
-        _STATE["data_source"] = f"bybit/{category}"
-
-    elif req.provider == "financialdata":
-        import financialdata_loader
-        api_key = req.api_key or os.environ.get("FINANCIALDATA_API_KEY")
-        if not api_key:
-            raise HTTPException(400, "Не задан API-ключ FinancialData")
-        financialdata_loader.use_financialdata(api_key=api_key)
-        _STATE["data_source"] = "financialdata"
-
-    elif req.provider == "yfinance":
-        tn.set_data_source(None)
-        _STATE["data_source"] = "yfinance"
-
-    else:
-        raise HTTPException(400, f"Неизвестный источник: {req.provider}")
-
-    return {"data_source": _STATE["data_source"]}
-
-
 @app.post("/api/train")
 def start_train(req: TrainReq):
     jid = JOBS.create("train", req.model_dump())
@@ -525,6 +675,26 @@ def start_backtest(req: BacktestReq):
     return {"job_id": jid}
 
 
+@app.post("/api/feature_importance", tags=["models"])
+def start_feature_importance(req: FeatureImportanceReq,
+                              user: dict = Depends(auth.require_admin)):
+    """Запускает расчёт permutation feature importance в фоне."""
+    jid = JOBS.create("feature_importance", req.model_dump())
+    _run_async(_do_feature_importance, jid, req)
+    return {"job_id": jid}
+
+
+@app.get("/api/feature_importance", tags=["models"])
+def get_feature_importance(symbol: str, interval: str = "1d",
+                           user: dict = Depends(auth.require_admin)):
+    """Возвращает последний сохранённый результат feature importance (если есть)."""
+    cfg = tn.make_config(symbol, interval)
+    fi = tn.load_feature_importance(cfg)
+    if fi is None:
+        raise HTTPException(404, "Данные feature importance не найдены. Запустите расчёт.")
+    return fi
+
+
 @app.post("/api/predict")
 def predict(req: PredictReq):
     cfg = tn.make_config(req.symbol, req.interval, period=req.period)
@@ -544,11 +714,18 @@ def forecast(
     cfg = tn.make_config(req.symbol, req.interval, period=req.period)
     try:
         result = tn.forecast(cfg, steps=req.steps, history=req.history)
-        # сохраняем сигнал в историю
+        # сохраняем сигнал в историю вместе с данными для графика
         if result.get("signal"):
+            import json as _json
             sig = dict(result["signal"])
             sig["interval"] = req.interval
-            auth.save_signal(current_user["id"], sig)
+            fc_json = _json.dumps({
+                "history":  result.get("history", []),
+                "forecast": result.get("forecast", []),
+                "levels":   result.get("levels"),
+                "last_price": result.get("last_price"),
+            })
+            auth.save_signal(current_user["id"], sig, forecast_json=fc_json)
         return result
     except FileNotFoundError:
         raise HTTPException(404, "Модель не найдена. Сначала обучите её.")
@@ -625,6 +802,15 @@ def job(jid: str):
     if not j:
         raise HTTPException(404, "Задача не найдена")
     return j
+
+
+@app.post("/api/jobs/{jid}/cancel", tags=["jobs"])
+def cancel_job(jid: str, user: dict = Depends(auth.require_admin)):
+    """Запрашивает остановку фоновой задачи (train / backtest)."""
+    ok = JOBS.cancel(jid)
+    if not ok:
+        raise HTTPException(400, "Задача не найдена или уже завершена")
+    return {"ok": True, "job_id": jid, "status": "cancelling"}
 
 
 # =============================================================================
@@ -755,6 +941,69 @@ def trigger_retrain(req: RetrainTriggerReq, _=Depends(auth.require_admin)):
 
     _run_async(_wrapped)
     return {"job_id": jid, "history_id": history_id}
+
+
+# =============================================================================
+# AUC Monitor эндпоинты
+# =============================================================================
+
+class AucMonitorSettingsReq(BaseModel):
+    enabled: bool = False
+    interval_hours: int = 6
+    warn_threshold: float = 0.54
+    retrain_threshold: float = 0.52
+    auto_retrain: bool = True
+
+
+@app.get("/api/auc_monitor", tags=["models"])
+def get_auc_monitor(_=Depends(auth.require_admin)):
+    """Текущие настройки и статус монитора AUC."""
+    with _AUC_MONITOR_LOCK:
+        state = dict(_AUC_MONITOR)
+    state["thread_alive"] = (_AUC_MONITOR_THREAD is not None and
+                              _AUC_MONITOR_THREAD.is_alive())
+    return state
+
+
+@app.post("/api/auc_monitor", tags=["models"])
+def set_auc_monitor(req: AucMonitorSettingsReq, _=Depends(auth.require_admin)):
+    """Обновляет настройки монитора и (пере)запускает поток."""
+    with _AUC_MONITOR_LOCK:
+        _AUC_MONITOR.update({
+            "enabled":           req.enabled,
+            "interval_hours":    req.interval_hours,
+            "warn_threshold":    req.warn_threshold,
+            "retrain_threshold": req.retrain_threshold,
+            "auto_retrain":      req.auto_retrain,
+        })
+    if req.enabled:
+        _ensure_monitor_thread()
+    return {"ok": True}
+
+
+@app.get("/api/models/metrics", tags=["models"])
+def all_model_metrics(_=Depends(auth.require_admin)):
+    """Возвращает AUC и статус для всех обученных моделей."""
+    return {"metrics": tn.get_all_metrics()}
+
+
+@app.post("/api/models/{tag}/refresh_metrics", tags=["models"])
+def refresh_metrics(tag: str, _=Depends(auth.require_admin)):
+    """Принудительно пересчитывает val AUC для модели (загружает данные и модель)."""
+    try:
+        result = tn.refresh_model_metrics(tag)
+        return result
+    except FileNotFoundError:
+        raise HTTPException(404, f"Модель {tag} не найдена")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/auc_monitor/check_now", tags=["models"])
+def check_auc_now(_=Depends(auth.require_admin)):
+    """Немедленно запускает проверку AUC всех моделей в фоне."""
+    _run_async(_run_auc_check)
+    return {"ok": True, "message": "Проверка AUC запущена в фоне"}
 
 
 if __name__ == "__main__":

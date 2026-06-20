@@ -161,6 +161,96 @@ function btnStyle(bg, border) {
   };
 }
 
+// ─── Поле токена с кнопкой показать/скрыть ───────────────────────────────────
+function TokenField({ label, value, onChange, placeholder, hint }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <div style={{ position: "relative" }}>
+        <input
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          style={{ paddingRight: 40 }}
+        />
+        <button
+          type="button"
+          onClick={() => setShow(v => !v)}
+          title={show ? "Скрыть" : "Показать"}
+          style={{
+            position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+            background: "none", border: "none", cursor: "pointer",
+            color: "var(--muted)", fontSize: 15, padding: "2px 4px", lineHeight: 1,
+          }}
+        >
+          {show ? "🙈" : "👁"}
+        </button>
+      </div>
+      {hint && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{hint}</div>}
+    </div>
+  );
+}
+
+// ─── Блок настройки токенов API ───────────────────────────────────────────────
+function ApiTokens() {
+  const [tinvest, setTinvest]   = useState("");
+  const [fd, setFd]             = useState("");
+  const [msg, setMsg]           = useState("");
+  const [err, setErr]           = useState("");
+  const [loading, setLoading]   = useState(false);
+
+  useEffect(() => {
+    apiReq("GET", "/api/admin/tokens").then(d => {
+      setTinvest(d.tinvest_token_set ? "●●●●●●●●●●●●" : "");
+      setFd(d.fd_key_set ? "●●●●●●●●●●●●" : "");
+    }).catch(() => {});
+  }, []);
+
+  async function save() {
+    setMsg(""); setErr(""); setLoading(true);
+    try {
+      const body = {};
+      if (tinvest && !tinvest.startsWith("●")) body.tinvest_token = tinvest;
+      if (fd && !fd.startsWith("●")) body.fd_key = fd;
+      await apiReq("POST", "/api/admin/tokens", body);
+      setMsg("Токены сохранены и применены");
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>Источники данных</div>
+      <div className="row2" style={{ marginBottom: 10 }}>
+        <TokenField
+          label="T-Invest API токен"
+          value={tinvest}
+          onChange={setTinvest}
+          placeholder="t.xxxxxxxxxxxxxxxx"
+          hint="Акции и облигации Мосбиржи"
+        />
+        <TokenField
+          label="FinancialData API ключ"
+          value={fd}
+          onChange={setFd}
+          placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          hint="Акции мировых бирж, ETF"
+        />
+      </div>
+      {msg && <div style={{ color: "var(--long)", fontSize: 13, marginBottom: 8 }}>✓ {msg}</div>}
+      {err && <div style={{ color: "var(--short)", fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      <button className="btn" style={{ width: "auto", padding: "9px 22px" }} onClick={save} disabled={loading}>
+        {loading ? "Сохранение…" : "Сохранить токены"}
+      </button>
+      <div style={{ borderTop: "1px solid var(--line)", marginTop: 20 }} />
+    </div>
+  );
+}
+
 // ─── Главный компонент AdminPanel ─────────────────────────────────────────────
 export default function AdminPanel({ currentUserId }) {
   const [users, setUsers]     = useState([]);
@@ -203,6 +293,7 @@ export default function AdminPanel({ currentUserId }) {
 
   return (
     <div>
+      <ApiTokens />
       {/* Сводка */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[

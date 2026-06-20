@@ -3,22 +3,22 @@
    Цифры — главный герой: моноширинный JetBrains Mono с табличными цифрами. */
 
 :root {
-  --ink: #0a0f1c;
-  --ink-2: #0d1424;
-  --panel: #0f1726;
-  --panel-2: #131d30;
-  --line: #1e2a41;
-  --line-soft: #18233a;
-  --text: #e8eef9;
-  --muted: #8593ac;
-  --muted-2: #5f6d86;
-  --long: #2dd4a7;
-  --long-dim: #11463a;
-  --short: #ff6b7a;
-  --short-dim: #43202a;
-  --amber: #f6b24b;
-  --primary: #5b8def;
-  --primary-press: #3f73d6;
+  --ink: #f4f6fb;
+  --ink-2: #eef1f8;
+  --panel: #ffffff;
+  --panel-2: #f8fafd;
+  --line: #dde3ef;
+  --line-soft: #e8ecf5;
+  --text: #0f1828;
+  --muted: #6b7a99;
+  --muted-2: #9aa3ba;
+  --long: #16a34a;
+  --long-dim: #dcfce7;
+  --short: #dc2626;
+  --short-dim: #fee2e2;
+  --amber: #d97706;
+  --primary: #3b6ff0;
+  --primary-press: #2457cc;
   --radius: 14px;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --display: "Space Grotesk", system-ui, sans-serif;
@@ -27,12 +27,14 @@
 
 * { box-sizing: border-box; }
 
+html {
+  overflow-y: scroll; /* скроллбар всегда виден — страница не прыгает */
+}
+
 html, body {
   margin: 0;
   padding: 0;
-  background:
-    radial-gradient(1200px 600px at 80% -10%, #16223b 0%, transparent 60%),
-    var(--ink);
+  background: var(--ink);
   color: var(--text);
   font-family: var(--body);
   -webkit-font-smoothing: antialiased;
@@ -49,8 +51,8 @@ button, input, select { font-family: inherit; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 22px 0 18px; border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 20;
-  background: linear-gradient(var(--ink) 70%, transparent);
-  backdrop-filter: blur(6px);
+  background: rgba(244,246,251,.92);
+  backdrop-filter: blur(8px);
 }
 .brand { display: flex; align-items: baseline; gap: 12px; }
 .brand h1 {
@@ -68,8 +70,36 @@ button, input, select { font-family: inherit; }
   border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px;
 }
 
+/* ---------- topbar user area ---------- */
+.topbar-user { display: flex; align-items: center; gap: 10px; }
+.user-pill {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--ink-2); border: 1px solid var(--line);
+  border-radius: 20px; padding: 5px 12px 5px 6px;
+  cursor: pointer; transition: border-color .15s;
+}
+.user-pill:hover { border-color: var(--primary); }
+.user-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; flex-shrink: 0;
+}
+.user-name { font-size: 13px; color: var(--text); font-weight: 500; }
+.role-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  background: var(--primary); color: #fff; font-weight: 600;
+}
+.logout-btn {
+  font-size: 12px; padding: 5px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: transparent;
+  color: var(--muted); cursor: pointer; transition: border-color .15s, color .15s;
+}
+.logout-btn:hover { border-color: var(--short); color: var(--short); }
+.desktop-only { display: flex; }
+
 /* ---------- tabs ---------- */
-.tabs { display: flex; gap: 4px; margin: 26px 0 20px; }
+.tabs { display: flex; gap: 4px; margin: 26px 0 4px; }
 .tab {
   background: none; border: none; color: var(--muted);
   font-family: var(--display); letter-spacing: 0.04em; font-size: 14px;
@@ -77,16 +107,33 @@ button, input, select { font-family: inherit; }
   transition: color .15s, background .15s;
 }
 .tab:hover { color: var(--text); }
-.tab.active { color: var(--ink); background: var(--text); font-weight: 600; }
+.tab.active { color: #fff; background: var(--primary); font-weight: 600; }
+
+/* ---------- subtabs (подменю Админки) ---------- */
+.subtabs {
+  display: flex; gap: 3px;
+  margin: 4px 0 20px; padding: 6px 8px;
+  background: var(--ink-2); border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.subtab {
+  background: none; border: none; color: var(--muted);
+  font-family: var(--body); font-size: 13px;
+  padding: 7px 14px; border-radius: 7px; cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.subtab:hover { color: var(--text); background: var(--panel); }
+.subtab.active { color: var(--primary); background: var(--panel); font-weight: 600; border: 1px solid var(--line); }
 
 /* ---------- grid + cards ---------- */
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
 
 .card {
-  background: linear-gradient(180deg, var(--panel) 0%, var(--ink-2) 100%);
+  background: var(--panel);
   border: 1px solid var(--line); border-radius: var(--radius);
   padding: 22px;
+  box-shadow: 0 1px 3px rgba(15,24,40,.06), 0 4px 12px rgba(15,24,40,.04);
 }
 .card h2 {
   font-family: var(--display); font-size: 15px; letter-spacing: 0.06em;
@@ -106,7 +153,7 @@ button, input, select { font-family: inherit; }
   margin-bottom: 6px; letter-spacing: 0.02em;
 }
 .field input, .field select {
-  width: 100%; background: var(--ink); color: var(--text);
+  width: 100%; background: var(--ink-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 10px;
   padding: 11px 12px; font-size: 14px; outline: none;
   transition: border-color .15s;
@@ -142,7 +189,8 @@ button, input, select { font-family: inherit; }
 /* ---------- signal ticket (signature) ---------- */
 .ticket {
   border: 1px solid var(--line); border-radius: var(--radius);
-  overflow: hidden; background: var(--panel-2);
+  overflow: hidden; background: var(--panel);
+  box-shadow: 0 1px 3px rgba(15,24,40,.06);
 }
 .ticket-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -184,8 +232,9 @@ button, input, select { font-family: inherit; }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 @media (max-width: 720px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
 .metric {
-  background: var(--panel-2); border: 1px solid var(--line);
+  background: var(--panel); border: 1px solid var(--line);
   border-radius: 11px; padding: 14px 14px 16px;
+  box-shadow: 0 1px 3px rgba(15,24,40,.05);
 }
 .metric .k { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
 .metric .v { font-family: var(--mono); font-size: 22px; margin-top: 6px; font-variant-numeric: tabular-nums; }
@@ -200,7 +249,7 @@ button, input, select { font-family: inherit; }
 
 /* ---------- job log ---------- */
 .joblog {
-  margin-top: 16px; background: var(--ink); border: 1px solid var(--line);
+  margin-top: 16px; background: var(--ink-2); border: 1px solid var(--line);
   border-radius: 11px; overflow: hidden;
 }
 .joblog-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; }
@@ -210,6 +259,7 @@ button, input, select { font-family: inherit; }
 .log-lines {
   font-family: var(--mono); font-size: 12px; color: var(--muted);
   padding: 12px 16px; max-height: 180px; overflow-y: auto; line-height: 1.7;
+  background: var(--ink-2);
 }
 .log-lines .ok { color: var(--long); }
 .log-lines .err { color: var(--short); }
@@ -227,8 +277,13 @@ button, input, select { font-family: inherit; }
 /* ═══════════════════════════════════════
    MOBILE / RESPONSIVE  ≤ 640px
    ═══════════════════════════════════════ */
+@media (max-width: 700px) {
+  .desktop-only { display: none !important; }
+}
+
 @media (max-width: 640px) {
   .shell { padding: 0 14px 60px; }
+  .profile-grid { grid-template-columns: 1fr !important; }
 
   /* topbar: две строки на мобиле */
   .topbar {

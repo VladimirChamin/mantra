@@ -102,26 +102,55 @@ TIMEFRAME_PRESETS = {
 
 # Ликвидные инструменты Мосбиржи (подсказки для интерфейса; можно ввести любой тикер).
 MOEX_INSTRUMENTS = [
-    {"ticker": "IMOEX", "name": "Индекс Мосбиржи", "kind": "index"},
-    {"ticker": "RTSI",  "name": "Индекс РТС", "kind": "index"},
-    {"ticker": "SBER",  "name": "Сбербанк", "kind": "share"},
-    {"ticker": "GAZP",  "name": "Газпром", "kind": "share"},
-    {"ticker": "LKOH",  "name": "Лукойл", "kind": "share"},
-    {"ticker": "GMKN",  "name": "Норникель", "kind": "share"},
-    {"ticker": "ROSN",  "name": "Роснефть", "kind": "share"},
-    {"ticker": "NVTK",  "name": "Новатэк", "kind": "share"},
-    {"ticker": "TATN",  "name": "Татнефть", "kind": "share"},
-    {"ticker": "MGNT",  "name": "Магнит", "kind": "share"},
-    {"ticker": "MTSS",  "name": "МТС", "kind": "share"},
-    {"ticker": "ALRS",  "name": "Алроса", "kind": "share"},
-    {"ticker": "CHMF",  "name": "Северсталь", "kind": "share"},
-    {"ticker": "PLZL",  "name": "Полюс", "kind": "share"},
-    {"ticker": "SNGS",  "name": "Сургутнефтегаз", "kind": "share"},
-    {"ticker": "VTBR",  "name": "ВТБ", "kind": "share"},
-    {"ticker": "MOEX",  "name": "Московская биржа", "kind": "share"},
-    {"ticker": "PHOR",  "name": "ФосАгро", "kind": "share"},
-    {"ticker": "RUAL",  "name": "Русал", "kind": "share"},
-    {"ticker": "YDEX",  "name": "Яндекс", "kind": "share"},
+    # Индексы
+    {"ticker": "IMOEX",   "name": "Индекс Мосбиржи",    "kind": "index"},
+    {"ticker": "RTSI",    "name": "Индекс РТС",          "kind": "index"},
+    # Акции МБ
+    {"ticker": "SBER",    "name": "Сбербанк",            "kind": "share"},
+    {"ticker": "GAZP",    "name": "Газпром",             "kind": "share"},
+    {"ticker": "LKOH",    "name": "Лукойл",              "kind": "share"},
+    {"ticker": "GMKN",    "name": "Норникель",           "kind": "share"},
+    {"ticker": "ROSN",    "name": "Роснефть",            "kind": "share"},
+    {"ticker": "NVTK",    "name": "Новатэк",             "kind": "share"},
+    {"ticker": "TATN",    "name": "Татнефть",            "kind": "share"},
+    {"ticker": "MGNT",    "name": "Магнит",              "kind": "share"},
+    {"ticker": "MTSS",    "name": "МТС",                 "kind": "share"},
+    {"ticker": "ALRS",    "name": "Алроса",              "kind": "share"},
+    {"ticker": "CHMF",    "name": "Северсталь",          "kind": "share"},
+    {"ticker": "PLZL",    "name": "Полюс",               "kind": "share"},
+    {"ticker": "SNGS",    "name": "Сургутнефтегаз",      "kind": "share"},
+    {"ticker": "VTBR",    "name": "ВТБ",                 "kind": "share"},
+    {"ticker": "MOEX",    "name": "Московская биржа",    "kind": "share"},
+    {"ticker": "PHOR",    "name": "ФосАгро",             "kind": "share"},
+    {"ticker": "RUAL",    "name": "Русал",               "kind": "share"},
+    {"ticker": "YDEX",    "name": "Яндекс",              "kind": "share"},
+    # Крипта
+    {"ticker": "BTCUSDT", "name": "Bitcoin",             "kind": "crypto"},
+    {"ticker": "ETHUSDT", "name": "Ethereum",            "kind": "crypto"},
+    {"ticker": "SOLUSDT", "name": "Solana",              "kind": "crypto"},
+    {"ticker": "BNBUSDT", "name": "BNB",                 "kind": "crypto"},
+    {"ticker": "XRPUSDT", "name": "XRP",                 "kind": "crypto"},
+    {"ticker": "ADAUSDT", "name": "Cardano",             "kind": "crypto"},
+    {"ticker": "DOGEUSDT","name": "Dogecoin",            "kind": "crypto"},
+    {"ticker": "AVAXUSDT","name": "Avalanche",           "kind": "crypto"},
+    {"ticker": "DOTUSDT", "name": "Polkadot",            "kind": "crypto"},
+    {"ticker": "LINKUSDT","name": "Chainlink",           "kind": "crypto"},
+    # Форекс
+    {"ticker": "EURUSD",  "name": "Евро / Доллар",      "kind": "forex"},
+    {"ticker": "GBPUSD",  "name": "Фунт / Доллар",      "kind": "forex"},
+    {"ticker": "USDJPY",  "name": "Доллар / Иена",      "kind": "forex"},
+    {"ticker": "USDRUB",  "name": "Доллар / Рубль",     "kind": "forex"},
+    {"ticker": "USDCNY",  "name": "Доллар / Юань",      "kind": "forex"},
+    {"ticker": "EURRUB",  "name": "Евро / Рубль",       "kind": "forex"},
+    # Товары
+    {"ticker": "XAUUSD",  "name": "Золото",              "kind": "commodity"},
+    {"ticker": "XAGUSD",  "name": "Серебро",             "kind": "commodity"},
+    {"ticker": "BRENT",   "name": "Нефть Brent",         "kind": "commodity"},
+    {"ticker": "CL",      "name": "Нефть WTI",           "kind": "commodity"},
+    {"ticker": "NG",      "name": "Природный газ",       "kind": "commodity"},
+    {"ticker": "ZC",      "name": "Кукуруза",            "kind": "commodity"},
+    {"ticker": "ZW",      "name": "Пшеница",             "kind": "commodity"},
+    {"ticker": "ZS",      "name": "Соя",                 "kind": "commodity"},
 ]
 
 
@@ -323,6 +352,43 @@ def load_ohlcv(cfg: Config) -> pd.DataFrame:
     )
 
 
+# Индексы для расчёта relative strength по классу активов
+_INDEX_BY_CLASS = {
+    "stocks": "IMOEX",
+    "crypto": "BTCUSDT",
+}
+
+
+def _try_load_index(symbol: str, interval: str) -> pd.DataFrame | None:
+    """Пытается загрузить индекс для расчёта relative strength. Не бросает исключений."""
+    if symbol.upper() in ("IMOEX", "RTSI", "BTCUSDT"):
+        return None  # не считаем RS для самого индекса
+    asset_class = detect_asset_class(symbol)
+    index_sym = _INDEX_BY_CLASS.get(asset_class)
+    if not index_sym or index_sym == symbol.upper():
+        return None
+    try:
+        cfg_idx = make_config(index_sym, interval)
+        return load_ohlcv(cfg_idx)
+    except Exception as e:
+        print(f"[features] Не удалось загрузить индекс {index_sym}: {e}")
+        return None
+
+
+def _try_load_htf(cfg: Config) -> pd.DataFrame | None:
+    """Загружает данные и строит HTF-агрегацию. Не бросает исключений."""
+    _htf_map = {"1h": "4h", "4h": "1d", "1d": "1w"}
+    if cfg.interval not in _htf_map:
+        return None
+    try:
+        # Загружаем те же данные основного инструмента — агрегируем сами
+        df = load_ohlcv(cfg)
+        return _make_htf_summary(df, cfg.interval)
+    except Exception as e:
+        print(f"[features] HTF контекст недоступен: {e}")
+        return None
+
+
 def _synthetic_ohlcv(n: int = 6000) -> pd.DataFrame:
     """Геометрическое блуждание с режимами тренда/флэта — чтобы код был запускаем без сети."""
     rng = np.random.default_rng(7)
@@ -342,55 +408,208 @@ def _synthetic_ohlcv(n: int = 6000) -> pd.DataFrame:
                          "close": close, "volume": vol}, index=idx)
 
 
-def add_features(df: pd.DataFrame, interval: str = "1d") -> pd.DataFrame:
-    """Технические индикаторы + GARCH/HAR-RV фичи. Все используют ТОЛЬКО прошлые данные."""
+def add_features(df: pd.DataFrame, interval: str = "1d",
+                 index_df: pd.DataFrame | None = None,
+                 htf_df: pd.DataFrame | None = None,
+                 ltf_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """
+    Технические индикаторы + GARCH/HAR-RV + календарные признаки.
+    Все используют ТОЛЬКО прошлые данные (нет утечки).
+
+    index_df — DataFrame с данными индекса (IMOEX/BTC.D) для relative strength.
+    htf_df   — агрегированные фичи старшего таймфрейма (например H4 для D1).
+    ltf_df   — агрегированные фичи младшего таймфрейма (не используется сейчас).
+    """
     out = df.copy()
     c, h, l, v = out["close"], out["high"], out["low"], out["volume"]
 
-    # доходности
-    out["ret_1"] = c.pct_change()
-    out["ret_5"] = c.pct_change(5)
+    # ── доходности ─────────────────────────────────────────────────────────────
+    out["ret_1"]  = c.pct_change()
+    out["ret_5"]  = c.pct_change(5)
     out["ret_10"] = c.pct_change(10)
 
-    # скользящие средние и отклонения от них
+    # ── скользящие средние и отклонения ────────────────────────────────────────
     for w in (10, 20, 50):
-        out[f"sma_{w}"] = c.rolling(w).mean() / c - 1
-        out[f"std_{w}"] = c.pct_change().rolling(w).std()
+        out[f"sma_{w}"]  = c.rolling(w).mean() / c - 1
+        out[f"std_{w}"]  = c.pct_change().rolling(w).std()
 
-    # EMA
+    # ── EMA ────────────────────────────────────────────────────────────────────
     out["ema_12"] = c.ewm(span=12).mean() / c - 1
     out["ema_26"] = c.ewm(span=26).mean() / c - 1
 
-    # MACD
+    # ── MACD ───────────────────────────────────────────────────────────────────
     macd = c.ewm(span=12).mean() - c.ewm(span=26).mean()
-    out["macd"] = macd / c
+    out["macd"]     = macd / c
     out["macd_sig"] = macd.ewm(span=9).mean() / c
 
-    # RSI(14)
+    # ── RSI(14) ────────────────────────────────────────────────────────────────
     delta = c.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / (loss + 1e-9)
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / (loss + 1e-9)
     out["rsi"] = 100 - 100 / (1 + rs)
 
-    # ATR(14) — нормированный к цене (нужен и как фича, и для разметки уровней)
-    tr = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-    atr = tr.rolling(14).mean()
-    out["atr"] = atr                 # абсолютный ATR — пригодится для барьеров
-    out["atr_norm"] = atr / c        # нормированный — как фича
+    # ── ATR(14) ────────────────────────────────────────────────────────────────
+    tr       = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr      = tr.rolling(14).mean()
+    out["atr"]      = atr        # абсолютный — для барьеров
+    out["atr_norm"] = atr / c    # нормированный — как фича
 
-    # Bollinger %B
+    # ── Bollinger %B ───────────────────────────────────────────────────────────
     mid = c.rolling(20).mean()
-    sd = c.rolling(20).std()
+    sd  = c.rolling(20).std()
     out["boll_b"] = (c - (mid - 2 * sd)) / (4 * sd + 1e-9)
 
-    # объёмные фичи
+    # ── объёмные фичи ──────────────────────────────────────────────────────────
     out["vol_chg"] = v.pct_change()
-    out["vol_z"] = (v - v.rolling(20).mean()) / (v.rolling(20).std() + 1e-9)
+    out["vol_z"]   = (v - v.rolling(20).mean()) / (v.rolling(20).std() + 1e-9)
 
-    # GARCH/HAR-RV фичи волатильности (rolling, без утечки)
+    # ── GARCH/HAR-RV фичи ──────────────────────────────────────────────────────
     out = add_vol_features(out, interval=interval)
 
+    # ── Календарные признаки ───────────────────────────────────────────────────
+    out = _add_calendar_features(out, interval=interval)
+
+    # ── Relative Strength (акция / индекс) ────────────────────────────────────
+    if index_df is not None:
+        out = _add_relative_strength(out, index_df)
+
+    # ── Мультитаймфрейм: контекст старшего ТФ ─────────────────────────────────
+    if htf_df is not None:
+        out = _merge_htf_features(out, htf_df, prefix="htf_")
+
+    return out
+
+
+# ── Вспомогательные функции для новых признаков ──────────────────────────────
+
+def _add_calendar_features(df: pd.DataFrame, interval: str = "1d") -> pd.DataFrame:
+    """
+    Циклически закодированные календарные признаки (sin/cos кодирование
+    позволяет модели видеть близость понедельника к воскресенью и т.д.)
+    """
+    idx = df.index
+    out = df.copy()
+
+    if not isinstance(idx, pd.DatetimeIndex):
+        try:
+            idx = pd.to_datetime(idx)
+        except Exception:
+            return out
+
+    dow   = idx.dayofweek           # 0=пн … 6=вс
+    month = idx.month               # 1..12
+
+    # день недели (цикл 7)
+    out["cal_dow_sin"]   = np.sin(2 * np.pi * dow / 7)
+    out["cal_dow_cos"]   = np.cos(2 * np.pi * dow / 7)
+
+    # месяц (цикл 12)
+    out["cal_month_sin"] = np.sin(2 * np.pi * (month - 1) / 12)
+    out["cal_month_cos"] = np.cos(2 * np.pi * (month - 1) / 12)
+
+    # близость к выходным: пятница=1, понедельник=0.75, среда=0
+    _prox = {0: 0.75, 1: 0.25, 2: 0.0, 3: 0.25, 4: 1.0, 5: 0.5, 6: 0.5}
+    out["cal_weekend_prox"] = dow.map(_prox).fillna(0.0).values
+
+    # только для внутридневных таймфреймов добавляем час
+    if interval in ("1h", "4h", "30m", "15m"):
+        hour = idx.hour
+        out["cal_hour_sin"] = np.sin(2 * np.pi * hour / 24)
+        out["cal_hour_cos"] = np.cos(2 * np.pi * hour / 24)
+        # торговая сессия Мосбиржи 10:00-23:50 → нормированная позиция внутри дня
+        session_start, session_end = 10, 23
+        session_len = session_end - session_start
+        out["cal_session_pos"] = ((hour - session_start) / session_len).clip(0, 1)
+
+    return out
+
+
+def _add_relative_strength(df: pd.DataFrame, index_df: pd.DataFrame,
+                            window: int = 20) -> pd.DataFrame:
+    """
+    Относительная сила: RS = (актив_ret - индекс_ret) / (σ_индекс + 1e-9)
+    Выравниваем индекс по индексу основного датафрейма.
+    """
+    out = df.copy()
+    try:
+        idx_close = index_df["close"].reindex(df.index, method="ffill")
+        asset_ret = out["close"].pct_change()
+        index_ret = idx_close.pct_change()
+
+        rs_raw = asset_ret - index_ret
+        out["rs_raw"]  = rs_raw
+        out["rs_z"]    = (rs_raw - rs_raw.rolling(window).mean()) / (rs_raw.rolling(window).std() + 1e-9)
+        out["rs_ratio"] = (out["close"] / out["close"].iloc[0]) / (idx_close / idx_close.iloc[0] + 1e-9) - 1
+
+        # бета (скользящая ковариация / дисперсия индекса)
+        cov  = asset_ret.rolling(window).cov(index_ret)
+        var  = index_ret.rolling(window).var()
+        out["rs_beta"] = cov / (var + 1e-9)
+    except Exception as e:
+        print(f"[features] Relative strength error: {e}")
+    return out
+
+
+def _make_htf_summary(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    """
+    Агрегирует OHLCV-данные в старший таймфрейм и считает базовые индикаторы.
+    D1 → W1: resample по неделям.
+    H4 → D1: resample по дням.
+    H1 → H4: resample по 4h.
+    Возвращает DataFrame с теми же датами, что и df (forward-fill).
+    """
+    _resample_map = {
+        "1h":  {"htf": "4h",  "rule": "4h"},
+        "4h":  {"htf": "1d",  "rule": "D"},
+        "1d":  {"htf": "1w",  "rule": "W"},
+    }
+    rule_info = _resample_map.get(interval)
+    if rule_info is None:
+        return pd.DataFrame(index=df.index)
+
+    rule = rule_info["rule"]
+    agg = df[["open", "high", "low", "close", "volume"]].resample(rule).agg({
+        "open":   "first",
+        "high":   "max",
+        "low":    "min",
+        "close":  "last",
+        "volume": "sum",
+    }).dropna()
+
+    if len(agg) < 5:
+        return pd.DataFrame(index=df.index)
+
+    c = agg["close"]
+    htf = pd.DataFrame(index=agg.index)
+    htf["htf_ret_1"]    = c.pct_change()
+    htf["htf_sma_10"]   = c.rolling(10).mean() / c - 1
+    htf["htf_sma_20"]   = c.rolling(20).mean() / c - 1
+
+    delta = c.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    htf["htf_rsi"]      = 100 - 100 / (1 + gain / (loss + 1e-9))
+
+    macd_ = c.ewm(span=12).mean() - c.ewm(span=26).mean()
+    htf["htf_macd"]     = macd_ / c
+    htf["htf_vol_z"]    = (
+        agg["volume"].pct_change().rolling(10)
+        .apply(lambda x: (x[-1] - x[:-1].mean()) / (x[:-1].std() + 1e-9) if len(x) > 1 else 0)
+    )
+
+    # forward-fill на индекс основного ТФ (значение недели/дня держится до следующего)
+    htf_ff = htf.reindex(df.index, method="ffill")
+    return htf_ff
+
+
+def _merge_htf_features(df: pd.DataFrame, htf_df: pd.DataFrame,
+                        prefix: str = "htf_") -> pd.DataFrame:
+    """Подклеивает колонки htf_df к df, переименовывая с префиксом."""
+    out = df.copy()
+    for col in htf_df.columns:
+        col_name = col if col.startswith(prefix) else f"{prefix}{col}"
+        out[col_name] = htf_df[col].values if len(htf_df) == len(df) else htf_df[col].reindex(df.index, method="ffill")
     return out
 
 
@@ -450,12 +669,18 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
 # 3. ПОДГОТОВКА ВЫБОРКИ: масштабирование + построение последовательностей
 # =============================================================================
 def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None = None,
-                  fit_scaler: bool = True):
+                  fit_scaler: bool = True,
+                  index_df: pd.DataFrame | None = None,
+                  htf_df: pd.DataFrame | None = None):
     """
     Готовит X (окна), y (3 цели) и метаданные. Масштабирование делается
     по train-части (без утечки), если scaler не передан.
+
+    index_df — данные индекса для relative strength (опционально).
+    htf_df   — агрегированные HTF-фичи (опционально).
     """
-    feats = add_features(df, interval=cfg.interval)
+    feats = add_features(df, interval=cfg.interval,
+                         index_df=index_df, htf_df=htf_df)
     p_up, fwd_ret, fwd_vol, valid = triple_barrier_targets(feats, cfg)
 
     # выбираем фичи (исключаем сырые цены/объём и абсолютный ATR)
@@ -521,17 +746,6 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
 #      сама учится взвешивать важные временны́е шаги (пробои, дивергенции и т.п.)
 #   4. Три параллельные выходные головы — интерфейс идентичен старой GRU-модели.
 # =============================================================================
-
-class LastStep(layers.Layer):
-    """Извлекает последний временной шаг из тензора (T, D) -> (D,).
-    Кастомный слой вместо Lambda — безопасно сериализуется в Keras 3."""
-
-    def call(self, x):
-        return x[:, -1, :]
-
-    def get_config(self):
-        return super().get_config()
-
 
 class LastStep(layers.Layer):
     """Извлекает последний временной шаг (T, D) -> (D,).
@@ -620,7 +834,9 @@ def _paths(cfg: Config):
 
 def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
     df = load_ohlcv(cfg)
-    data, scaler = build_dataset(df, cfg)
+    index_df = _try_load_index(cfg.symbol, cfg.interval)
+    htf_df   = _try_load_htf(cfg)
+    data, scaler = build_dataset(df, cfg, index_df=index_df, htf_df=htf_df)
 
     Xtr, Xva = data["X"][data["is_train"]], data["X"][~data["is_train"]]
     ytr = [data["p_up"][data["is_train"]], data["fwd_ret"][data["is_train"]], data["fwd_vol"][data["is_train"]]]
@@ -665,7 +881,11 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
     joblib.dump(scaler, paths["scaler"])
     with open(paths["config"], "w") as f:
         json.dump(asdict(cfg), f, indent=2)
-    print(f"[train] Сохранено: {paths['model']}")
+
+    # сохраняем метрики val AUC
+    val_auc = _compute_val_auc(model, Xva, yva[0])
+    _save_metrics(cfg, val_auc)
+    print(f"[train] Сохранено: {paths['model']}  val_auc={val_auc:.4f}")
     return model, scaler
 
 
@@ -711,7 +931,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
         cfg_i = make_config(sym, interval, epochs=epochs, model_dir=model_dir)
         try:
             df = load_ohlcv(cfg_i)
-            data, scaler_i = build_dataset(df, cfg_i)
+            index_df_i = _try_load_index(sym, interval)
+            htf_df_i   = _make_htf_summary(df, interval) if interval in ("1h", "4h", "1d") else None
+            data, scaler_i = build_dataset(df, cfg_i, index_df=index_df_i, htf_df=htf_df_i)
         except Exception as e:
             _log(f"[universal] {sym} пропущен: {e}")
             continue
@@ -776,7 +998,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
     with open(paths["config"], "w") as f:
         json.dump(asdict(cfg_proto), f, indent=2)
 
-    _log(f"[universal] Модель сохранена: {paths['model']}")
+    val_auc = _compute_val_auc(model, Xva, yva[0])
+    _save_metrics(cfg_proto, val_auc)
+    _log(f"[universal] Модель сохранена: {paths['model']}  val_auc={val_auc:.4f}")
     _log(f"[universal] Обучена на: {', '.join(scalers.keys())}")
     return model, scalers
 
@@ -822,18 +1046,31 @@ def load_artifacts(cfg: Config):
     return model, scaler
 
 
-def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
-    """Берёт последнее окно данных и выдаёт сигнал входа/стопа/тейка."""
-    model, scaler = load_artifacts(cfg)
-    if df is None:
-        df = load_ohlcv(cfg)
+def _infer_features(cfg: Config, df: pd.DataFrame, scaler) -> tuple:
+    """
+    Строит матрицу признаков для инференса (те же фичи, что при обучении).
+    Возвращает (X_scaled, feats).
+    """
+    index_df = _try_load_index(cfg.symbol, cfg.interval)
+    htf_df   = _make_htf_summary(df, cfg.interval) if cfg.interval in ("1h", "4h", "1d") else None
 
-    feats = add_features(df, interval=cfg.interval).replace([np.inf, -np.inf], np.nan)
-    X_raw = feats[cfg.feature_cols].to_numpy(dtype=np.float32)
+    feats = add_features(df, interval=cfg.interval,
+                         index_df=index_df,
+                         htf_df=htf_df).replace([np.inf, -np.inf], np.nan)
+
+    # используем только те колонки, на которых обучали
+    available_cols = [c for c in cfg.feature_cols if c in feats.columns]
+    missing_cols   = [c for c in cfg.feature_cols if c not in feats.columns]
+    if missing_cols:
+        print(f"[infer] Отсутствующие фичи (заполняем 0): {missing_cols}")
+
+    X_raw = np.zeros((len(feats), len(cfg.feature_cols)), dtype=np.float32)
+    for i, col in enumerate(cfg.feature_cols):
+        if col in feats.columns:
+            X_raw[:, i] = feats[col].to_numpy(dtype=np.float32)
+
     X_clean = np.nan_to_num(X_raw)
 
-    # если scaler не обучен на реальных данных (универсальная модель) —
-    # фитируем точно так же как в build_dataset: только по train-части
     from sklearn.preprocessing import StandardScaler as _SS
     if not hasattr(scaler, "mean_") or scaler.mean_ is None or np.all(scaler.mean_ == 0):
         split = int(len(X_clean) * (1 - cfg.val_fraction))
@@ -841,7 +1078,16 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         finite_rows = np.isfinite(X_clean).all(axis=1)[:split]
         scaler = _SS().fit(train_part[finite_rows] if finite_rows.any() else train_part)
 
-    X_scaled = scaler.transform(X_clean)
+    return scaler.transform(X_clean), feats
+
+
+def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
+    """Берёт последнее окно данных и выдаёт сигнал входа/стопа/тейка."""
+    model, scaler = load_artifacts(cfg)
+    if df is None:
+        df = load_ohlcv(cfg)
+
+    X_scaled, feats = _infer_features(cfg, df, scaler)
 
     L = cfg.lookback
     window = X_scaled[-L:][None, ...]
@@ -911,18 +1157,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     if df is None:
         df = load_ohlcv(cfg)
 
-    feats = add_features(df, interval=cfg.interval).replace([np.inf, -np.inf], np.nan)
-    X_raw = feats[cfg.feature_cols].to_numpy(dtype=np.float32)
-    X_clean = np.nan_to_num(X_raw)
-
-    from sklearn.preprocessing import StandardScaler as _SS
-    if not hasattr(scaler, "mean_") or scaler.mean_ is None or np.all(scaler.mean_ == 0):
-        split = int(len(X_clean) * (1 - cfg.val_fraction))
-        finite_rows = np.isfinite(X_clean).all(axis=1)[:split]
-        train_part = X_clean[:split]
-        scaler = _SS().fit(train_part[finite_rows] if finite_rows.any() else train_part)
-
-    X_scaled = scaler.transform(X_clean)
+    X_scaled, feats = _infer_features(cfg, df, scaler)
     window = X_scaled[-cfg.lookback:][None, ...]
     p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in model.predict(window, verbose=0)]
 
@@ -976,7 +1211,232 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
 
 
 # =============================================================================
-# 7. CLI
+# 7. МЕТРИКИ КАЧЕСТВА МОДЕЛЕЙ (val AUC, мониторинг деградации)
+# =============================================================================
+
+# Пороги AUC: критично < 0.54, предупреждение < 0.56, норма >= 0.56
+AUC_THRESHOLD_WARN     = 0.54   # ниже → warn
+AUC_THRESHOLD_RETRAIN  = 0.52   # ниже → автоматически запустить retrain
+AUC_THRESHOLD_OK       = 0.56   # выше → всё хорошо
+
+
+def _compute_val_auc(model, Xva: np.ndarray, yva: np.ndarray) -> float:
+    """Быстрый расчёт val AUC по уже подготовленным выборкам."""
+    from sklearn.metrics import roc_auc_score
+    try:
+        preds = model.predict(Xva, verbose=0)[0].ravel()
+        return float(roc_auc_score(yva, preds))
+    except Exception:
+        return 0.5
+
+
+def _save_metrics(cfg: Config, val_auc: float):
+    """Сохраняет метрики в {tag}_metrics.json рядом с моделью."""
+    paths = _paths(cfg)
+    metrics_path = paths["model"].replace("_model.keras", "_metrics.json")
+    existing: dict = {}
+    if os.path.exists(metrics_path):
+        try:
+            with open(metrics_path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            pass
+
+    history = existing.get("history", [])
+    history.append({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "val_auc": round(val_auc, 5),
+    })
+    history = history[-30:]  # храним последние 30 точек
+
+    status = (
+        "ok"       if val_auc >= AUC_THRESHOLD_OK
+        else "warn"     if val_auc >= AUC_THRESHOLD_WARN
+        else "critical"
+    )
+    data = {
+        "tag":      cfg.tag,
+        "symbol":   cfg.symbol,
+        "interval": cfg.interval,
+        "val_auc":  round(val_auc, 5),
+        "status":   status,
+        "updated":  datetime.now().isoformat(timespec="seconds"),
+        "history":  history,
+    }
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def get_model_metrics(tag: str, model_dir: str = "models") -> dict | None:
+    """Загружает метрики конкретной модели по тегу."""
+    path = os.path.join(model_dir, f"{tag}_metrics.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def get_all_metrics(model_dir: str = "models") -> list[dict]:
+    """
+    Возвращает метрики всех обученных моделей.
+    Для моделей без _metrics.json делает быстрый расчёт AUC на лету
+    и сохраняет результат.
+    """
+    if not os.path.isdir(model_dir):
+        return []
+
+    results = []
+    for fname in sorted(os.listdir(model_dir)):
+        if not fname.endswith("_model.keras"):
+            continue
+        tag = fname[:-len("_model.keras")]
+        metrics = get_model_metrics(tag, model_dir)
+        if metrics:
+            results.append(metrics)
+        else:
+            # метрик нет — добавляем запись-заглушку без пересчёта
+            # (пересчёт дорогой, делается по запросу или после retrain)
+            parts = tag.rsplit("_", 1)
+            results.append({
+                "tag":      tag,
+                "symbol":   parts[0] if len(parts) == 2 else tag,
+                "interval": parts[1] if len(parts) == 2 else "",
+                "val_auc":  None,
+                "status":   "unknown",
+                "updated":  None,
+                "history":  [],
+            })
+    return results
+
+
+def refresh_model_metrics(tag: str, model_dir: str = "models") -> dict:
+    """
+    Загружает модель и данные, пересчитывает val AUC, сохраняет метрики.
+    Для классовых моделей (STOCKS, CRYPTO…) берём первый символ из класса.
+    """
+    parts = tag.rsplit("_", 1)
+    if len(parts) != 2:
+        raise ValueError(f"Не удалось разобрать тег: {tag}")
+    symbol_or_class, interval = parts
+
+    # классовая модель: symbol_or_class ∈ ASSET_CLASS_META (в верхнем регистре)
+    cls_key = symbol_or_class.lower()
+    if cls_key in ASSET_CLASS_META:
+        symbols = ASSET_CLASS_META[cls_key].get("default_symbols", [])
+        if not symbols:
+            raise ValueError(f"Нет символов для класса {symbol_or_class}")
+        # берём первый доступный символ
+        symbol = symbols[0]
+    else:
+        symbol = symbol_or_class
+
+    cfg = make_config(symbol, interval, model_dir=model_dir)
+    model, scaler = load_artifacts(cfg)
+
+    df = load_ohlcv(cfg)
+    index_df = _try_load_index(cfg.symbol, cfg.interval)
+    htf_df   = _make_htf_summary(df, cfg.interval) if cfg.interval in ("1h", "4h", "1d") else None
+    data, _  = build_dataset(df, cfg, scaler=scaler, fit_scaler=False,
+                              index_df=index_df, htf_df=htf_df)
+
+    Xva = data["X"][~data["is_train"]]
+    yva = data["p_up"][~data["is_train"]]
+    val_auc = _compute_val_auc(model, Xva, yva)
+
+    # сохраняем под тегом классовой модели, а не первого символа
+    cfg_save = make_config(symbol_or_class, interval, model_dir=model_dir)
+    _save_metrics(cfg_save, val_auc)
+    return get_model_metrics(tag, model_dir)
+
+
+# =============================================================================
+# 8. FEATURE IMPORTANCE (permutation importance на валидационной выборке)
+# =============================================================================
+
+def compute_feature_importance(cfg: Config, n_repeats: int = 3) -> list[dict]:
+    """
+    Permutation importance: для каждого признака перемешиваем его значения
+    в валидационной выборке и смотрим, насколько ухудшается бинарный AUC
+    на голове p_up. Метрика — drop_auc (чем больше, тем важнее признак).
+
+    Возвращает список словарей, отсортированный по убыванию важности:
+        [{"feature": str, "importance": float, "rank": int}, ...]
+    """
+    from sklearn.metrics import roc_auc_score
+
+    model, scaler = load_artifacts(cfg)
+    df = load_ohlcv(cfg)
+    index_df = _try_load_index(cfg.symbol, cfg.interval)
+    htf_df   = _make_htf_summary(df, cfg.interval) if cfg.interval in ("1h", "4h", "1d") else None
+    data, _  = build_dataset(df, cfg, scaler=scaler, fit_scaler=False,
+                              index_df=index_df, htf_df=htf_df)
+
+    Xva = data["X"][~data["is_train"]]
+    yva = data["p_up"][~data["is_train"]]
+
+    if len(Xva) < 20:
+        raise RuntimeError("Слишком мало данных в валидации для расчёта feature importance")
+
+    # базовый AUC
+    def _auc(X):
+        preds = model.predict(X, verbose=0)[0].ravel()
+        try:
+            return roc_auc_score(yva, preds)
+        except Exception:
+            return 0.5
+
+    base_auc = _auc(Xva)
+    rng = np.random.default_rng(42)
+    n_feat = Xva.shape[2]  # (samples, lookback, features)
+
+    importances = []
+    for fi in range(n_feat):
+        drops = []
+        for _ in range(n_repeats):
+            X_perm = Xva.copy()
+            perm_idx = rng.permutation(len(X_perm))
+            X_perm[:, :, fi] = X_perm[perm_idx, :, fi]
+            drops.append(base_auc - _auc(X_perm))
+        importances.append(float(np.mean(drops)))
+
+    feature_names = cfg.feature_cols
+    results = sorted(
+        [{"feature": feature_names[i], "importance": round(importances[i], 5), "rank": 0}
+         for i in range(min(n_feat, len(feature_names)))],
+        key=lambda x: x["importance"], reverse=True,
+    )
+    for rank, item in enumerate(results, 1):
+        item["rank"] = rank
+
+    # сохраняем рядом с моделью
+    paths = _paths(cfg)
+    fi_path = paths["model"].replace("_model.keras", "_feature_importance.json")
+    with open(fi_path, "w", encoding="utf-8") as f:
+        json.dump({"base_auc": round(base_auc, 5), "features": results}, f,
+                  ensure_ascii=False, indent=2)
+    print(f"[importance] Сохранено: {fi_path}  base_auc={base_auc:.4f}")
+    return results
+
+
+def load_feature_importance(cfg: Config) -> dict | None:
+    """Загружает ранее сохранённый результат feature importance (если есть)."""
+    tag = resolve_model_tag(cfg.symbol, cfg.interval, cfg.model_dir)
+    load_cfg = cfg if tag == cfg.tag else Config(
+        symbol=tag.rsplit("_", 1)[0], interval=cfg.interval, model_dir=cfg.model_dir
+    )
+    fi_path = os.path.join(load_cfg.model_dir,
+                           f"{load_cfg.tag}_feature_importance.json")
+    if not os.path.exists(fi_path):
+        return None
+    with open(fi_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# =============================================================================
+# 8. CLI
 # =============================================================================
 def parse_args():
     p = argparse.ArgumentParser(description="Trading NN: entry / SL / TP")

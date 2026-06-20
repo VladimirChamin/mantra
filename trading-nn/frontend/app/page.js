@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { getUser, logout } from "@/lib/auth";
-import Link from "next/link";
 import SignalTicket from "@/components/SignalTicket";
 import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
@@ -14,6 +13,8 @@ import AdminPanel from "@/components/AdminPanel";
 import Screener from "@/components/Screener";
 import Subscriptions from "@/components/Subscriptions";
 import RetrainingPanel from "@/components/RetrainingPanel";
+import ModelMetrics from "@/components/ModelMetrics";
+import SymbolInput from "@/components/SymbolInput";
 
 const DEFAULT_INTERVALS = ["1d", "4h", "1h"];
 
@@ -27,22 +28,17 @@ function Field({ label, children }) {
 }
 
 export default function Dashboard() {
-  const [tab, setTab] = useState("signal");
+  const [tab, setTab] = useState(null);
   const [health, setHealth] = useState(null);
   const [online, setOnline] = useState(false);
   const [meta, setMeta] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
+  const [userLoaded, setUserLoaded] = useState(false);
   const [signals, setSignals] = useState([]);
   const [aiQuota, setAiQuota] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const isAdmin = currentUser?.role === "admin";
 
-  // источник данных
-  const [provider, setProvider] = useState("yfinance");
-  const [tinvestToken, setTinvestToken] = useState("");
-  const [bybitCategory, setBybitCategory] = useState("spot");
-  const [fdApiKey, setFdApiKey] = useState("");
-  const [srcMsg, setSrcMsg] = useState("");
-  const [srcErr, setSrcErr] = useState("");
 
   // обучение по классам активов
   const [assetClasses, setAssetClasses] = useState(null);
@@ -94,6 +90,7 @@ export default function Dashboard() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const poll = useRef(null);
+  const [historyFc, setHistoryFc] = useState(null); // выбранный прогноз из истории
 
   // состояние backend
   async function refreshHealth() {
@@ -101,13 +98,6 @@ export default function Dashboard() {
       const h = await api.health();
       setHealth(h);
       setOnline(true);
-      if (h.data_source) {
-        const ds = h.data_source;
-        if (ds.startsWith("tinvest")) setProvider("tinvest");
-        else if (ds.startsWith("bybit")) setProvider("bybit");
-        else if (ds.startsWith("financialdata")) setProvider("financialdata");
-        else setProvider("yfinance");
-      }
     } catch {
       setOnline(false);
     }
@@ -115,7 +105,8 @@ export default function Dashboard() {
   useEffect(() => {
     const u = getUser();
     setCurrentUser(u);
-    if (u?.role !== "admin") setTab("signal");
+    setTab("signal");
+    setUserLoaded(true);
     refreshHealth();
     api.meta().then(setMeta).catch(() => {});
     api.assetClasses().then(setAssetClasses).catch(() => {});
@@ -132,7 +123,7 @@ export default function Dashboard() {
       try {
         const j = await api.job(jobId);
         setJob(j);
-        if (j.status === "done" || j.status === "error") {
+        if (j.status === "done" || j.status === "error" || j.status === "cancelled") {
           clearInterval(poll.current);
           setBusy(false);
           refreshHealth();
@@ -146,19 +137,9 @@ export default function Dashboard() {
   }
   useEffect(() => () => poll.current && clearInterval(poll.current), []);
 
-  async function applySource() {
-    setSrcMsg(""); setSrcErr("");
-    try {
-      const payload = { provider };
-      if (provider === "tinvest") payload.token = tinvestToken || undefined;
-      if (provider === "bybit") payload.category = bybitCategory;
-      if (provider === "financialdata") payload.api_key = fdApiKey || undefined;
-      const r = await api.setDataSource(provider, payload);
-      setSrcMsg(`Подключено: ${r.data_source}`);
-      refreshHealth();
-    } catch (e) {
-      setSrcErr(e.message);
-    }
+  async function stopJob() {
+    if (!job?.id) return;
+    try { await api.cancelJob(job.id); } catch (e) { setErr(e.message); }
   }
 
   async function startTrain() {
@@ -201,7 +182,7 @@ export default function Dashboard() {
   }
 
   async function getSignal() {
-    setErr(""); setBusy(true); setSignal(null); setFc(null);
+    setErr(""); setBusy(true); setSignal(null); setFc(null); setHistoryFc(null);
     try {
       const f = await api.forecast({ ...pred, steps: 10, history: 50 });
       setFc(f);
@@ -211,145 +192,149 @@ export default function Dashboard() {
     setBusy(false);
   }
 
+  async function deleteSignal(id) {
+    try {
+      await api.deleteSignal(id);
+      setSignals(s => s.filter(x => x.id !== id));
+      if (historyFc?.signal_id === id) setHistoryFc(null);
+    } catch (e) { setErr(e.message); }
+  }
+
+  function viewSignalChart(s) {
+    if (!s.forecast_json) return;
+    try {
+      const data = JSON.parse(s.forecast_json);
+      setHistoryFc({ ...data, signal_id: s.id });
+    } catch {}
+  }
+
   const btResult = job && job.kind === "backtest" && job.status === "done" ? job.result : null;
   const trainSignal = job && job.kind === "train" && job.status === "done" ? job.result?.signal : null;
+  const fiResult = job && job.kind === "feature_importance" && job.status === "done" ? job.result : null;
+
+  // Feature importance
+  const [fi, setFi] = useState(null);
+  const [fiLoading, setFiLoading] = useState(false);
+
+  async function startFeatureImportance() {
+    setErr(""); setBusy(true); setJob(null); setFi(null);
+    try {
+      const r = await api.runFeatureImportance({ symbol: train.symbol, interval: train.interval, n_repeats: 3 });
+      watch(r.job_id);
+    } catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  async function loadFeatureImportance() {
+    setFiLoading(true);
+    try {
+      const r = await api.getFeatureImportance(train.symbol, train.interval);
+      setFi(r);
+    } catch (e) { setErr(e.message); }
+    setFiLoading(false);
+  }
+
+  if (!userLoaded) return (
+    <div className="shell" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+      <span className="spinner" style={{ width: 20, height: 20 }} />
+    </div>
+  );
+
+  // Основные табы (видны всем пользователям)
+  const mainTabs = [
+    ["signal", "Сигнал"],
+    ["screener", "Скриннер"],
+    ["subscriptions", "Подписки"],
+    ...(isAdmin ? [["admin", "Админка"]] : []),
+  ];
+
+  // Подменю Админки
+  const adminSubTabs = [
+    ["train", "Обучение"],
+    ["classes", "Классы активов"],
+    ["backtest", "Walk-forward"],
+    ["retrain", "Расписание"],
+    ["metrics", "Метрики AUC"],
+  ];
+
+  const isAdminSub = adminSubTabs.some(([k]) => k === tab);
 
   return (
     <div className="shell">
-      <datalist id="moex">
-        {instruments.map((i) => (
-          <option key={i.ticker} value={i.ticker}>{i.name}</option>
-        ))}
-      </datalist>
       <div className="topbar">
         <div className="brand">
-          <h1>Нейротерминал</h1>
-          <span className="tick">tf · gru · triple-barrier</span>
+          <h1>MANTRA</h1>
+          <span className={`dot ${online ? "live" : "down"}`} style={{ marginLeft: 6 }} />
         </div>
-        <div className="status">
-          <span className="src-pill">{health ? health.data_source : "—"}</span>
-          <span>моделей: {health ? health.models : "—"}</span>
-          <span>
-            <span className={`dot ${online ? "live" : "down"}`} />{" "}
-            {online ? "backend на связи" : "backend недоступен"}
-          </span>
+
+        {/* десктоп: имя пользователя + профиль + выход */}
+        <div className="topbar-user desktop-only">
           {currentUser && (
-            <span style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
-              <Link href="/profile" style={{
-                fontSize: 12, color: "var(--muted)", textDecoration: "none",
-                display: "flex", alignItems: "center", gap: 5,
-              }}>
-                <span>{currentUser.name || currentUser.email}</span>
-                <span style={{
-                  fontSize: 10, padding: "1px 6px",
-                  borderRadius: 4, background: isAdmin ? "var(--primary)" : "var(--line)",
-                  color: isAdmin ? "#fff" : "var(--muted)", verticalAlign: "middle",
-                }}>{isAdmin ? "admin" : "user"}</span>
-              </Link>
-              <button onClick={logout} style={{
-                fontSize: 11, padding: "3px 10px", borderRadius: 5,
-                border: "1px solid var(--line)", background: "transparent",
-                color: "var(--muted)", cursor: "pointer",
-              }}>Выход</button>
-            </span>
+            <>
+              <button onClick={() => setTab("profile")} className="user-pill">
+                <span className="user-avatar">{(currentUser.name || currentUser.email || "?")[0].toUpperCase()}</span>
+                <span className="user-name">{currentUser.name || currentUser.email}</span>
+                {isAdmin && <span className="role-badge">admin</span>}
+              </button>
+              <button onClick={logout} className="logout-btn">Выйти</button>
+            </>
           )}
         </div>
+
+        {/* гамбургер — только мобиле */}
+        <button className="hamburger" onClick={() => setMenuOpen(o => !o)} aria-label="Меню">
+          <span /><span /><span />
+        </button>
       </div>
 
-      <div className="tabs">
-        {(isAdmin
-          ? [
-              ["train", "Обучение"],
-              ["classes", "Классы активов"],
-              ["backtest", "Walk-forward"],
-              ["signal", "Сигнал"],
-              ["screener", "Скриннер"],
-              ["subscriptions", "Подписки"],
-              ["retrain", "Расписание"],
-              ["admin", "Админка"],
-            ]
-          : [
-              ["signal", "Сигнал"],
-              ["screener", "Скриннер"],
-              ["subscriptions", "Подписки"],
-            ]
-        ).map(([k, label]) => (
-          <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
+      {/* десктопные табы */}
+      <div className="tabs desktop-tabs">
+        {mainTabs.map(([k, label]) => (
+          <button key={k} className={`tab ${(tab === k || (k === "admin" && isAdminSub)) ? "active" : ""}`} onClick={() => setTab(k)}>
             {label}
           </button>
         ))}
       </div>
 
-      {/* источник данных — только для admin */}
-      {isAdmin && <div className="card" style={{ marginBottom: 18 }}>
-        <span className="eyebrow">Источник данных</span>
-
-        {/* карточки-провайдеры */}
-        <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-          {[
-            { id: "yfinance",       label: "Yahoo Finance",     sub: "Бесплатно, без ключа" },
-            { id: "tinvest",        label: "T-Invest",          sub: "Мосбиржа · токен API" },
-            { id: "bybit",          label: "Bybit",             sub: "Крипто · без ключа" },
-            { id: "financialdata",  label: "FinancialData.net", sub: "Акции/форекс · API key" },
-          ].map(({ id, label, sub }) => (
-            <button
-              key={id}
-              onClick={() => setProvider(id)}
-              style={{
-                flex: "1 1 160px",
-                padding: "10px 14px",
-                borderRadius: 8,
-                border: `2px solid ${provider === id ? "var(--accent)" : "var(--border)"}`,
-                background: provider === id ? "var(--accent-dim, rgba(99,179,237,.12))" : "var(--card)",
-                cursor: "pointer",
-                textAlign: "left",
-                transition: "border-color .15s",
-              }}
-            >
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{label}</div>
-              <div style={{ fontSize: 11, opacity: .6, marginTop: 2 }}>{sub}</div>
+      {/* подменю Админки */}
+      {isAdmin && (tab === "admin" || isAdminSub) && (
+        <div className="subtabs desktop-tabs">
+          {adminSubTabs.map(([k, label]) => (
+            <button key={k} className={`subtab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
+              {label}
             </button>
           ))}
         </div>
+      )}
 
-        {/* поля по провайдеру */}
-        <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
-          {provider === "tinvest" && (
-            <Field label="Токен T-Invest">
-              <input type="password" placeholder="t.xxxxxxxxxxxxxxxx"
-                value={tinvestToken} onChange={(e) => setTinvestToken(e.target.value)}
-                style={{ minWidth: 260 }} />
-            </Field>
-          )}
-          {provider === "bybit" && (
-            <Field label="Тип рынка Bybit">
-              <select value={bybitCategory} onChange={(e) => setBybitCategory(e.target.value)}>
-                <option value="spot">Spot</option>
-                <option value="linear">Linear (USDT-перп)</option>
-                <option value="inverse">Inverse</option>
-              </select>
-            </Field>
-          )}
-          {provider === "financialdata" && (
-            <Field label="API Key (financialdata.net)">
-              <input type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                value={fdApiKey} onChange={(e) => setFdApiKey(e.target.value)}
-                style={{ minWidth: 280 }} />
-            </Field>
-          )}
-          {provider === "yfinance" && (
-            <p className="sub" style={{ margin: 0 }}>
-              Данные загружаются автоматически — ключ не нужен.
-            </p>
-          )}
-          <button className="btn ghost" onClick={applySource} style={{ alignSelf: "end" }}>
-            Применить
-          </button>
+      {/* мобильное меню-дровер */}
+      {menuOpen && (
+        <div className="mobile-menu">
+          <div className="mobile-menu-overlay" onClick={() => setMenuOpen(false)} />
+          <div className="mobile-menu-drawer">
+            <div className="mobile-menu-header">
+              <span style={{ fontWeight: 700, fontSize: 16 }}>MANTRA</span>
+              <button onClick={() => setMenuOpen(false)} className="close-btn">✕</button>
+            </div>
+            {currentUser && (
+              <div className="mobile-user">
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{currentUser.name || currentUser.email}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{isAdmin ? "Администратор" : "Пользователь"}</div>
+              </div>
+            )}
+            {[...mainTabs, ...(isAdmin ? adminSubTabs : []), ["profile", "Профиль"]].map(([k, label]) => (
+              <button key={k}
+                className={`mobile-tab ${tab === k ? "active" : ""}`}
+                onClick={() => { setTab(k); setMenuOpen(false); }}
+              >
+                {label}
+              </button>
+            ))}
+            <button onClick={() => { logout(); setMenuOpen(false); }} className="mobile-logout">Выйти</button>
+          </div>
         </div>
+      )}
 
-        {srcMsg && <div className="eyebrow" style={{ color: "var(--long)", marginTop: 8 }}>{srcMsg}</div>}
-        {srcErr && <div className="error" style={{ marginTop: 8 }}>{srcErr}</div>}
-      </div>}
+
 
       {tab === "train" && isAdmin && (
         <div className="grid">
@@ -358,7 +343,7 @@ export default function Dashboard() {
             <p className="sub">Модель обучается на истории и сохраняется на сервере.</p>
             <div className="row2">
               <Field label="Инструмент">
-                <input list="moex" value={train.symbol} onChange={(e) => setTrain({ ...train, symbol: e.target.value })} />
+                <SymbolInput value={train.symbol} instruments={instruments} onChange={v => setTrain({ ...train, symbol: v })} />
               </Field>
               <Field label="Таймфрейм">
                 <select value={train.interval} onChange={(e) => setTrainInterval(e.target.value)}>
@@ -379,19 +364,91 @@ export default function Dashboard() {
                 onChange={(e) => setTrain({ ...train, warm_start: e.target.checked })} />
               <span>Тёплый старт (дообучить существующую модель)</span>
             </label>
-            <button className="btn" onClick={startTrain} disabled={busy || !online}>
-              {busy ? "Идёт обучение…" : "Запустить обучение"}
-            </button>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="btn" onClick={startTrain} disabled={busy || !online}>
+                {busy && job?.kind === "train" ? "Идёт обучение…" : "Запустить обучение"}
+              </button>
+              {busy && job?.kind === "train" && job?.status !== "cancelling" && (
+                <button className="btn ghost" onClick={stopJob}
+                  style={{ width: "auto", padding: "0 20px", color: "var(--short)", borderColor: "var(--short)" }}>
+                  Стоп
+                </button>
+              )}
+            </div>
             {err ? <div className="error">{err}</div> : null}
           </div>
 
           <div className="card">
             <h2>Ход обучения</h2>
             <p className="sub">Прогресс по эпохам и пробный сигнал после завершения.</p>
-            {job && job.kind === "train" ? <JobLog job={job} /> :
+            {job && (job.kind === "train" || job.kind === "feature_importance") ? <JobLog job={job} /> :
               <div className="empty">Задач пока нет. Запустите обучение слева.</div>}
             {trainSignal ? <div style={{ marginTop: 16 }}><SignalTicket signal={trainSignal} /></div> : null}
           </div>
+        </div>
+      )}
+
+      {tab === "train" && isAdmin && (
+        <div className="card" style={{ marginTop: 18 }}>
+          <h2>Feature Importance</h2>
+          <p className="sub">
+            Permutation importance: насколько ухудшается AUC модели при случайном перемешивании каждого признака.
+            Чем больше значение — тем важнее признак.
+          </p>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <button className="btn" style={{ width: "auto", padding: "9px 22px" }}
+              onClick={startFeatureImportance} disabled={busy || !online}>
+              {busy && job?.kind === "feature_importance" ? "Считаю…" : "Рассчитать"}
+            </button>
+            <button className="btn ghost" style={{ width: "auto", padding: "9px 22px" }}
+              onClick={loadFeatureImportance} disabled={fiLoading}>
+              {fiLoading ? "Загрузка…" : "Загрузить последний"}
+            </button>
+          </div>
+
+          {(fi || fiResult) && (() => {
+            const data = fi || fiResult;
+            const features = data.features || data.top10 || [];
+            const topN = features.slice(0, 20);
+            const maxImp = Math.max(...topN.map(f => Math.abs(f.importance)), 0.0001);
+            return (
+              <div>
+                {data.base_auc != null && (
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+                    Base AUC: <strong>{data.base_auc}</strong>
+                  </div>
+                )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  {topN.map((f, i) => (
+                    <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 22, fontSize: 11, color: "var(--muted)", textAlign: "right", flexShrink: 0 }}>
+                        {f.rank}
+                      </div>
+                      <div style={{ width: 160, fontSize: 12, fontFamily: "var(--mono)", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {f.feature}
+                      </div>
+                      <div style={{ flex: 1, height: 16, background: "var(--ink-2)", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{
+                          height: "100%", borderRadius: 3,
+                          width: `${Math.abs(f.importance) / maxImp * 100}%`,
+                          background: f.importance > 0 ? "var(--primary)" : "var(--short)",
+                          transition: "width .3s",
+                        }} />
+                      </div>
+                      <div style={{ width: 60, fontSize: 11, fontFamily: "var(--mono)", color: f.importance > 0 ? "var(--long)" : "var(--short)", textAlign: "right", flexShrink: 0 }}>
+                        {f.importance > 0 ? "+" : ""}{f.importance.toFixed(4)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {features.length > 20 && (
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                    Показано 20 из {features.length} признаков
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -455,9 +512,17 @@ export default function Dashboard() {
                     }))} />
                 </Field>
               </div>
-              <button className="btn" onClick={startClassTrain} disabled={busy || !online}>
-                {busy ? "Обучение…" : `Обучить модель «${assetClasses?.[activeClass]?.label || activeClass}»`}
-              </button>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button className="btn" onClick={startClassTrain} disabled={busy || !online}>
+                  {busy && job?.kind === "train_universal" ? "Обучение…" : `Обучить модель «${assetClasses?.[activeClass]?.label || activeClass}»`}
+                </button>
+                {busy && job?.kind === "train_universal" && job?.status !== "cancelling" && (
+                  <button className="btn ghost" onClick={stopJob}
+                    style={{ width: "auto", padding: "0 20px", color: "var(--short)", borderColor: "var(--short)" }}>
+                    Стоп
+                  </button>
+                )}
+              </div>
               {err ? <div className="error">{err}</div> : null}
             </div>
 
@@ -481,7 +546,7 @@ export default function Dashboard() {
               <h2>Walk-forward тест</h2>
               <p className="sub">Окно за окном: обучение на прошлом, проверка на будущем.</p>
               <div className="row2">
-                <Field label="Инструмент"><input list="moex" value={bt.symbol} onChange={(e) => setBt({ ...bt, symbol: e.target.value })} /></Field>
+                <Field label="Инструмент"><SymbolInput value={bt.symbol} instruments={instruments} onChange={v => setBt({ ...bt, symbol: v })} /></Field>
                 <Field label="Таймфрейм">
                   <select value={bt.interval} onChange={(e) => setBtInterval(e.target.value)}>
                     {intervals.map((i) => <option key={i}>{i}</option>)}
@@ -503,9 +568,17 @@ export default function Dashboard() {
                   onChange={(e) => setBt({ ...bt, anchored: e.target.checked })} />
                 <span>Расширяющееся окно (anchored)</span>
               </label>
-              <button className="btn" onClick={startBacktest} disabled={busy || !online}>
-                {busy ? "Идёт тест…" : "Запустить walk-forward"}
-              </button>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button className="btn" onClick={startBacktest} disabled={busy || !online}>
+                  {busy && job?.kind === "backtest" ? "Идёт тест…" : "Запустить walk-forward"}
+                </button>
+                {busy && job?.kind === "backtest" && job?.status !== "cancelling" && (
+                  <button className="btn ghost" onClick={stopJob}
+                    style={{ width: "auto", padding: "0 20px", color: "var(--short)", borderColor: "var(--short)" }}>
+                    Стоп
+                  </button>
+                )}
+              </div>
               {err ? <div className="error">{err}</div> : null}
             </div>
 
@@ -540,6 +613,39 @@ export default function Dashboard() {
         </div>
       )}
 
+      <style>{`
+        .hamburger { display: none; flex-direction: column; gap: 5px; background: none; border: none; cursor: pointer; padding: 6px; }
+        .hamburger span { display: block; width: 22px; height: 2px; background: var(--text); border-radius: 2px; }
+        .desktop-tabs { display: flex; }
+        .mobile-menu { display: none; }
+        @media (max-width: 700px) {
+          .hamburger { display: flex; }
+          .desktop-tabs { display: none; }
+          .mobile-menu { display: block; position: fixed; inset: 0; z-index: 200; }
+          .mobile-menu-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.3); }
+          .mobile-menu-drawer {
+            position: absolute; top: 0; left: 0; bottom: 0; width: 270px;
+            background: var(--panel); box-shadow: 4px 0 24px rgba(0,0,0,.12);
+            display: flex; flex-direction: column; overflow-y: auto;
+          }
+          .mobile-menu-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px 18px 14px; border-bottom: 1px solid var(--line);
+          }
+          .close-btn { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--muted); }
+          .mobile-user { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+          .mobile-tab {
+            width: 100%; padding: 14px 18px; text-align: left;
+            background: none; border: none; border-bottom: 1px solid var(--line-soft);
+            font-size: 15px; cursor: pointer; color: var(--text);
+            font-family: var(--body);
+          }
+          .mobile-tab.active { color: var(--primary); font-weight: 600; background: var(--ink-2); }
+          .mobile-tab:hover { background: var(--ink-2); }
+          .mobile-logout { margin: auto 18px 18px; padding: 11px 0; border-radius: 9px; border: 1.5px solid var(--short); background: none; color: var(--short); font-size: 14px; cursor: pointer; font-family: var(--body); }
+        }
+      `}</style>
+
       {tab === "screener" && (
         <Screener />
       )}
@@ -552,6 +658,19 @@ export default function Dashboard() {
         <RetrainingPanel />
       )}
 
+      {tab === "metrics" && isAdmin && (
+        <div className="card">
+          <h2>Мониторинг качества моделей</h2>
+          <p className="sub">
+            AUC (площадь под ROC-кривой) показывает, насколько хорошо модель разделяет
+            длинные и короткие сигналы. AUC 0.5 = случайное угадывание, &gt;0.56 = норма.
+          </p>
+          <ModelMetrics />
+        </div>
+      )}
+
+      {tab === "profile" && <ProfileTab user={currentUser} aiQuota={aiQuota} isAdmin={isAdmin} />}
+
       {tab === "signal" && (
         <>
           <div className="grid">
@@ -559,7 +678,7 @@ export default function Dashboard() {
               <h2>Прогноз и сигнал</h2>
               <p className="sub">Модель оценивает последнее окно: выдаёт вход / стоп / тейк и строит прогноз на 10 баров.</p>
               <div className="row2">
-                <Field label="Инструмент"><input list="moex" value={pred.symbol} onChange={(e) => setPred({ ...pred, symbol: e.target.value })} /></Field>
+                <Field label="Инструмент"><SymbolInput value={pred.symbol} instruments={instruments} onChange={v => setPred({ ...pred, symbol: v })} /></Field>
                 <Field label="Таймфрейм">
                   <select value={pred.interval} onChange={(e) => setPred({ ...pred, interval: e.target.value })}>
                     {intervals.map((i) => <option key={i}>{i}</option>)}
@@ -605,40 +724,167 @@ export default function Dashboard() {
           {signals.length > 0 && (
             <div className="card" style={{ marginTop: 18 }}>
               <h2>История прогнозов</h2>
-              <p className="sub">Ваши последние запросы, сохранённые в базе данных.</p>
+              <p className="sub">Нажмите на строку чтобы открыть график, корзина — удалить.</p>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr style={{ opacity: 0.5, textAlign: "left" }}>
-                      {["Дата", "Символ", "ТФ", "Направление", "Вход", "SL", "TP", "P(up)"].map(h => (
-                        <th key={h} style={{ padding: "6px 10px", borderBottom: "1px solid var(--border)", fontWeight: 500 }}>{h}</th>
+                      {["Дата", "Символ", "ТФ", "Направление", "Вход", "SL", "TP", "P(up)", ""].map(h => (
+                        <th key={h} style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)", fontWeight: 500 }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {signals.map((s, i) => (
-                      <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                        <td style={{ padding: "7px 10px", opacity: 0.6 }}>
-                          {s.created_at ? new Date(s.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
-                        </td>
-                        <td style={{ padding: "7px 10px", fontWeight: 600 }}>{s.symbol || "—"}</td>
-                        <td style={{ padding: "7px 10px", opacity: 0.6 }}>{s.interval || "—"}</td>
-                        <td style={{ padding: "7px 10px", color: s.direction === "LONG" ? "var(--long)" : s.direction === "SHORT" ? "var(--short)" : "var(--muted2)", fontWeight: 600 }}>
-                          {s.direction || "—"}
-                        </td>
-                        <td style={{ padding: "7px 10px" }}>{s.entry != null ? s.entry.toLocaleString("ru-RU") : "—"}</td>
-                        <td style={{ padding: "7px 10px", color: "var(--short)" }}>{s.stop_loss != null ? s.stop_loss.toLocaleString("ru-RU") : "—"}</td>
-                        <td style={{ padding: "7px 10px", color: "var(--long)" }}>{s.take_profit != null ? s.take_profit.toLocaleString("ru-RU") : "—"}</td>
-                        <td style={{ padding: "7px 10px", opacity: 0.8 }}>{s.prob_up != null ? `${(s.prob_up * 100).toFixed(1)}%` : "—"}</td>
-                      </tr>
-                    ))}
+                    {signals.map((s) => {
+                      const isActive = historyFc?.signal_id === s.id;
+                      const hasChart = !!s.forecast_json;
+                      return (
+                        <tr key={s.id}
+                          onClick={() => hasChart && viewSignalChart(s)}
+                          style={{
+                            borderBottom: "1px solid var(--line)",
+                            background: isActive ? "var(--ink-2)" : "transparent",
+                            cursor: hasChart ? "pointer" : "default",
+                          }}
+                        >
+                          <td style={{ padding: "7px 10px", color: "var(--muted)", fontSize: 12 }}>
+                            {s.created_at ? new Date(s.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                          </td>
+                          <td style={{ padding: "7px 10px", fontWeight: 700, fontFamily: "var(--mono)" }}>{s.symbol || "—"}</td>
+                          <td style={{ padding: "7px 10px", color: "var(--muted)", fontFamily: "var(--mono)" }}>{s.interval || "—"}</td>
+                          <td style={{ padding: "7px 10px", fontWeight: 700,
+                            color: s.direction === "LONG" ? "var(--long)" : s.direction === "SHORT" ? "var(--short)" : "var(--muted)" }}>
+                            {s.direction || "—"}
+                          </td>
+                          <td style={{ padding: "7px 10px", fontFamily: "var(--mono)" }}>{s.entry != null ? s.entry.toLocaleString("ru-RU") : "—"}</td>
+                          <td style={{ padding: "7px 10px", color: "var(--short)", fontFamily: "var(--mono)" }}>{s.stop_loss != null ? s.stop_loss.toLocaleString("ru-RU") : "—"}</td>
+                          <td style={{ padding: "7px 10px", color: "var(--long)", fontFamily: "var(--mono)" }}>{s.take_profit != null ? s.take_profit.toLocaleString("ru-RU") : "—"}</td>
+                          <td style={{ padding: "7px 10px", fontFamily: "var(--mono)" }}>{s.prob_up != null ? `${(s.prob_up * 100).toFixed(1)}%` : "—"}</td>
+                          <td style={{ padding: "7px 4px", textAlign: "right" }}>
+                            <button
+                              onClick={e => { e.stopPropagation(); deleteSignal(s.id); }}
+                              title="Удалить"
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 15, padding: "2px 6px", borderRadius: 5 }}
+                              onMouseEnter={e => e.currentTarget.style.color = "var(--short)"}
+                              onMouseLeave={e => e.currentTarget.style.color = "var(--muted)"}
+                            >✕</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
+
+              {historyFc && (
+                <div style={{ marginTop: 18, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <h2 style={{ margin: 0, fontSize: 14 }}>График прогноза из истории</h2>
+                    <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
+                  </div>
+                  <ForecastChart data={historyFc} />
+                </div>
+              )}
             </div>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Профиль как встроенная вкладка ───────────────────────────────────────
+function ProfileTab({ user, aiQuota, isAdmin }) {
+  const [curPw, setCurPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confPw, setConfPw] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+  const [pwErr, setPwErr] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
+
+  async function changePassword(e) {
+    e.preventDefault();
+    setPwMsg(""); setPwErr("");
+    if (newPw !== confPw) { setPwErr("Пароли не совпадают"); return; }
+    if (newPw.length < 6) { setPwErr("Минимум 6 символов"); return; }
+    setPwLoading(true);
+    try {
+      await api.changePassword({ current_password: curPw, new_password: newPw });
+      setPwMsg("Пароль успешно изменён");
+      setCurPw(""); setNewPw(""); setConfPw("");
+    } catch (e) { setPwErr(e.message); }
+    setPwLoading(false);
+  }
+
+  if (!user) return null;
+  const quotaPct = aiQuota && !isAdmin ? Math.min(100, (aiQuota.used / aiQuota.limit) * 100) : 0;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 18, alignItems: "start" }}
+      className="profile-grid">
+
+      {/* левая колонка */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="card">
+          <div style={{ width: 52, height: 52, borderRadius: "50%", background: isAdmin ? "var(--primary)" : "var(--line)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700, color: isAdmin ? "#fff" : "var(--muted)", marginBottom: 14 }}>
+            {(user.name || user.email || "?")[0].toUpperCase()}
+          </div>
+          {[
+            ["Имя", user.name || "—"],
+            ["Email", user.email],
+            ["Роль", isAdmin ? "Администратор" : "Пользователь"],
+            ["Регистрация", user.created_at ? new Date(user.created_at).toLocaleDateString("ru-RU") : "—"],
+          ].map(([k, v]) => (
+            <div key={k} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>{k}</div>
+              <div style={{ fontSize: 14, fontWeight: 500 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        {aiQuota && (
+          <div className="card">
+            <h2>AI-лимит</h2>
+            {isAdmin
+              ? <div style={{ color: "var(--long)", fontWeight: 600, marginTop: 8 }}>∞ Без ограничений</div>
+              : <>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, marginBottom: 6, fontSize: 13 }}>
+                    <span style={{ color: "var(--muted)" }}>Использовано</span>
+                    <span style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{aiQuota.used} / {aiQuota.limit}</span>
+                  </div>
+                  <div style={{ height: 5, background: "var(--line)", borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ height: "100%", borderRadius: 4, background: aiQuota.remaining === 0 ? "var(--short)" : "var(--primary)", width: `${quotaPct}%` }} />
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 5 }}>
+                    Осталось: <strong style={{ color: aiQuota.remaining === 0 ? "var(--short)" : "var(--long)" }}>{aiQuota.remaining}</strong>
+                  </div>
+                </>
+            }
+          </div>
+        )}
+
+        <div className="card">
+          <button onClick={logout} className="btn" style={{ background: "var(--short-dim)", border: "1px solid var(--short)", color: "var(--short)" }}>
+            Выйти из аккаунта
+          </button>
+        </div>
+      </div>
+
+      {/* правая колонка — смена пароля */}
+      <div className="card">
+        <h2>Смена пароля</h2>
+        <p className="sub">Новый пароль вступает в силу немедленно. Минимум 6 символов.</p>
+        <form onSubmit={changePassword} style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 4 }}>
+          {pwMsg && <div style={{ background: "var(--long-dim)", border: "1px solid var(--long)", color: "var(--long)", borderRadius: 9, padding: "10px 14px", fontSize: 13 }}>✓ {pwMsg}</div>}
+          {pwErr && <div className="error">{pwErr}</div>}
+          <div className="field"><label>Текущий пароль</label><input type="password" value={curPw} onChange={e => setCurPw(e.target.value)} required /></div>
+          <div className="field"><label>Новый пароль</label><input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} required /></div>
+          <div className="field"><label>Повторите новый пароль</label><input type="password" value={confPw} onChange={e => setConfPw(e.target.value)} required /></div>
+          {newPw && confPw && newPw !== confPw && <div style={{ fontSize: 12, color: "var(--short)", marginTop: -6 }}>Пароли не совпадают</div>}
+          {newPw && confPw && newPw === confPw && newPw.length >= 6 && <div style={{ fontSize: 12, color: "var(--long)", marginTop: -6 }}>✓ Совпадают</div>}
+          <button type="submit" className="btn" disabled={pwLoading}>{pwLoading ? "Сохранение…" : "Сменить пароль"}</button>
+        </form>
+      </div>
     </div>
   );
 }

@@ -183,7 +183,9 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
 
     for fi, (tr_s, tr_e, te_e) in enumerate(folds):
         if on_progress:
-            on_progress(fi / len(folds), f"Фолд {fi + 1}/{len(folds)}: обучение")
+            cancelled = on_progress(fi / len(folds), f"Фолд {fi + 1}/{len(folds)}: обучение")
+            if cancelled:
+                break
 
         # масштабирование по train-строкам фолда
         scaler = StandardScaler()
@@ -215,7 +217,9 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
         # сигналы на тестовом отрезке
         Xte, end_te = _make_sequences(X_scaled, row_ok, L, tr_e, te_e)
         if on_progress:
-            on_progress((fi + 0.5) / len(folds), f"Фолд {fi + 1}/{len(folds)}: тест")
+            cancelled = on_progress((fi + 0.5) / len(folds), f"Фолд {fi + 1}/{len(folds)}: тест")
+            if cancelled:
+                break
         if len(Xte) == 0:
             continue
         preds = model.predict(Xte, verbose=0)

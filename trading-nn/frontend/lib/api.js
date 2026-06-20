@@ -28,8 +28,6 @@ export const api = {
   health: () => req("/api/health"),
   meta: () => req("/api/meta"),
   models: () => req("/api/models"),
-  setDataSource: (provider, payload = {}) =>
-    req("/api/datasource", { method: "POST", body: JSON.stringify({ provider, ...payload }) }),
   train: (payload) =>
     req("/api/train", { method: "POST", body: JSON.stringify(payload) }),
   trainUniversal: (payload) =>
@@ -44,7 +42,9 @@ export const api = {
     req("/api/forecast", { method: "POST", body: JSON.stringify(payload) }),
   job: (id) => req(`/api/jobs/${id}`),
   jobs: () => req("/api/jobs"),
+  cancelJob: (id) => req(`/api/jobs/${id}/cancel`, { method: "POST" }),
   mySignals: () => req("/api/signals"),
+  deleteSignal: (id) => req(`/api/signals/${id}`, { method: "DELETE" }),
   allSignals: () => req("/api/signals/all"),
   me: () => req("/api/auth/me"),
   aiQuota: () => req("/api/ai_quota"),
@@ -60,6 +60,17 @@ export const api = {
     req(`/api/subscriptions/${id}`, { method: "DELETE" }),
   toggleSubscription: (id, active) =>
     req(`/api/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
+  // AUC Monitor
+  getModelMetrics: () => req("/api/models/metrics"),
+  refreshModelMetrics: (tag) => req(`/api/models/${tag}/refresh_metrics`, { method: "POST" }),
+  getAucMonitor: () => req("/api/auc_monitor"),
+  setAucMonitor: (payload) => req("/api/auc_monitor", { method: "POST", body: JSON.stringify(payload) }),
+  checkAucNow: () => req("/api/auc_monitor/check_now", { method: "POST" }),
+  // Feature importance
+  runFeatureImportance: (payload) =>
+    req("/api/feature_importance", { method: "POST", body: JSON.stringify(payload) }),
+  getFeatureImportance: (symbol, interval) =>
+    req(`/api/feature_importance?symbol=${symbol}&interval=${interval}`),
   // Переобучение по расписанию (admin)
   getRetrainHistory: () => req("/api/retrain/history"),
   saveRetrainSchedules: (schedules) =>

@@ -242,12 +242,227 @@ def fetch_fear_greed() -> Optional[dict]:
         return None
 
 
+# ─── 4. On-Chain данные (крипто, без ключа) ──────────────────────────────────
+
+# Базовые тикеры монет из торгового тикера
+_COIN_MAP = {
+    "BTCUSDT": "bitcoin", "ETHUSDT": "ethereum", "SOLUSDT": "solana",
+    "BNBUSDT": "binancecoin", "XRPUSDT": "ripple", "ADAUSDT": "cardano",
+    "DOGEUSDT": "dogecoin", "AVAXUSDT": "avalanche-2", "DOTUSDT": "polkadot",
+    "LINKUSDT": "chainlink", "UNIUSDT": "uniswap", "MATICUSDT": "matic-network",
+}
+
+_COINGLASS_COIN = {
+    "BTCUSDT": "BTC", "ETHUSDT": "ETH", "SOLUSDT": "SOL",
+    "BNBUSDT": "BNB", "XRPUSDT": "XRP", "ADAUSDT": "ADA",
+    "DOGEUSDT": "DOGE", "AVAXUSDT": "AVAX", "DOTUSDT": "DOT",
+    "LINKUSDT": "LINK",
+}
+
+
+def _coingecko_market(coin_id: str) -> Optional[dict]:
+    """Базовые on-chain метрики через CoinGecko (бесплатно, без ключа)."""
+    try:
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}"
+        params = {
+            "localization": "false",
+            "tickers": "false",
+            "market_data": "true",
+            "community_data": "true",
+            "developer_data": "false",
+        }
+        r = httpx.get(url, params=params, timeout=FETCH_TIMEOUT,
+                      headers={"Accept": "application/json"})
+        r.raise_for_status()
+        d = r.json()
+        md = d.get("market_data", {})
+        cd = d.get("community_data", {})
+
+        def _v(x):
+            if isinstance(x, dict): return x.get("usd")
+            return x
+
+        return {
+            "market_cap_usd":        _v(md.get("market_cap")),
+            "total_volume_24h":      _v(md.get("total_volume")),
+            "circulating_supply":    md.get("circulating_supply"),
+            "total_supply":          md.get("total_supply"),
+            "price_change_24h_pct":  md.get("price_change_percentage_24h"),
+            "price_change_7d_pct":   md.get("price_change_percentage_7d"),
+            "price_change_30d_pct":  md.get("price_change_percentage_30d"),
+            "ath":                   _v(md.get("ath")),
+            "ath_change_pct":        _v(md.get("ath_change_percentage")),
+            "twitter_followers":     cd.get("twitter_followers"),
+            "reddit_subscribers":    cd.get("reddit_subscribers"),
+        }
+    except Exception as e:
+        log.debug("CoinGecko error: %s", e)
+        return None
+
+
+def _coinglass_funding(symbol: str) -> Optional[dict]:
+    """Funding Rate + Open Interest через CoinGlass (публичный API)."""
+    coin = _COINGLASS_COIN.get(symbol.upper())
+    if not coin:
+        return None
+    try:
+        # Open Interest
+        r_oi = httpx.get(
+            "https://open-api.coinglass.com/public/v2/open_interest",
+            params={"symbol": coin},
+            headers={"coinglassSecret": ""},
+            timeout=FETCH_TIMEOUT,
+        )
+        oi_data = None
+        if r_oi.status_code == 200:
+            oi_json = r_oi.json()
+            if oi_json.get("success") and oi_json.get("data"):
+                oi_data = oi_json["data"]
+
+        # Funding rate
+        r_fr = httpx.get(
+            "https://open-api.coinglass.com/public/v2/funding",
+            params={"symbol": coin},
+            headers={"coinglassSecret": ""},
+            timeout=FETCH_TIMEOUT,
+        )
+        fr_data = None
+        if r_fr.status_code == 200:
+            fr_json = r_fr.json()
+            if fr_json.get("success") and fr_json.get("data"):
+                fr_data = fr_json["data"]
+
+        if not oi_data and not fr_data:
+            return None
+
+        result: dict = {}
+        if oi_data:
+            total_oi = sum(x.get("openInterest", 0) for x in oi_data if isinstance(x, dict))
+            result["open_interest_usd"] = total_oi
+        if fr_data:
+            rates = [x.get("fundingRate", 0) for x in fr_data if isinstance(x, dict) and x.get("fundingRate") is not None]
+            if rates:
+                avg_rate = sum(rates) / len(rates)
+                result["funding_rate_avg"] = round(avg_rate * 100, 4)
+                result["funding_sentiment"] = (
+                    "лонги платят шортам" if avg_rate < 0
+                    else "шорты платят лонгам" if avg_rate > 0
+                    else "нейтрально"
+                )
+        return result or None
+    except Exception as e:
+        log.debug("CoinGlass error: %s", e)
+        return None
+
+
+def _longshort_ratio(symbol: str) -> Optional[dict]:
+    """Long/Short ratio с Binance (публичный, без ключа)."""
+    # Binance endpoint для глобального LS ratio
+    base = symbol.upper().replace("USDT", "") + "USDT"
+    try:
+        r = httpx.get(
+            "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+            params={"symbol": base, "period": "1h", "limit": 3},
+            timeout=FETCH_TIMEOUT,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        if not rows:
+            return None
+        latest = rows[0]
+        ls = float(latest.get("longShortRatio", 1.0))
+        long_pct = float(latest.get("longAccount", 0.5)) * 100
+        return {
+            "long_short_ratio": round(ls, 3),
+            "long_pct": round(long_pct, 1),
+            "short_pct": round(100 - long_pct, 1),
+            "sentiment": "лонги доминируют" if ls > 1.2 else ("шорты доминируют" if ls < 0.8 else "баланс"),
+        }
+    except Exception as e:
+        log.debug("Binance LS error: %s", e)
+        return None
+
+
+def _exchange_netflow(symbol: str) -> Optional[dict]:
+    """Приток/отток монет на биржи через CryptoQuant community (без ключа, BTC/ETH)."""
+    # Используем CoinGecko exchange_volume как прокси для netflow
+    coin = _COIN_MAP.get(symbol.upper())
+    if not coin or coin not in ("bitcoin", "ethereum"):
+        return None
+    try:
+        # blockchain.info для BTC: число транзакций и активные адреса
+        if coin == "bitcoin":
+            r = httpx.get("https://blockchain.info/stats?format=json", timeout=FETCH_TIMEOUT)
+            r.raise_for_status()
+            d = r.json()
+            return {
+                "active_addresses_24h": d.get("n_unique_addresses"),
+                "tx_count_24h":         d.get("n_tx"),
+                "avg_fee_usd":          round(d.get("total_fees_usd", 0) / max(d.get("n_tx", 1), 1), 2),
+                "hash_rate":            d.get("hash_rate"),
+                "difficulty":           d.get("difficulty"),
+                "note": "blockchain.info / BTC",
+            }
+    except Exception as e:
+        log.debug("blockchain.info error: %s", e)
+    return None
+
+
+def fetch_onchain(symbol: str) -> Optional[dict]:
+    """
+    Агрегирует on-chain данные из нескольких источников.
+    Возвращает None если символ не является криптой.
+    """
+    sym = symbol.upper()
+    coin_id = _COIN_MAP.get(sym)
+    if not coin_id:
+        return None
+
+    result: dict = {"symbol": sym}
+    errors = []
+
+    # CoinGecko market + community data
+    cg = _coingecko_market(coin_id)
+    if cg:
+        result["market"] = cg
+    else:
+        errors.append("coingecko")
+
+    # Funding Rate + OI (CoinGlass)
+    cg_der = _coinglass_funding(sym)
+    if cg_der:
+        result["derivatives"] = cg_der
+
+    # Long/Short ratio (Binance Futures)
+    ls = _longshort_ratio(sym)
+    if ls:
+        result["long_short"] = ls
+
+    # Exchange netflow (blockchain.info для BTC)
+    nf = _exchange_netflow(sym)
+    if nf:
+        result["netflow"] = nf
+
+    if errors:
+        result["errors"] = errors
+
+    return result if len(result) > 2 else None
+
+
 # ─── 4. DeepSeek синтез ───────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """Ты — опытный финансовый аналитик. Твоя задача — дать краткий,
 структурированный фундаментальный анализ актива и сказать, подтверждает ли он
 торговый сигнал нейронной сети. Отвечай строго по секциям. Будь конкретен,
 избегай воды. Используй русский язык."""
+
+def _fmt_large(n) -> str:
+    if n is None: return "н/д"
+    if n >= 1e9: return f"{n/1e9:.2f}B"
+    if n >= 1e6: return f"{n/1e6:.2f}M"
+    if n >= 1e3: return f"{n/1e3:.1f}K"
+    return str(n)
+
 
 def _build_prompt(
     symbol: str,
@@ -256,6 +471,7 @@ def _build_prompt(
     news_items: list[dict],
     cot: Optional[dict],
     fear_greed: Optional[dict],
+    onchain: Optional[dict] = None,
 ) -> str:
     lines = [f"## Актив: {symbol}"]
     lines.append(f"## Сигнал нейросети: {signal_direction}"
@@ -278,6 +494,41 @@ def _build_prompt(
         lines.append(f"- Значение: {fear_greed['value']} / 100 — {fear_greed['label']}")
         lines.append("")
 
+    # On-Chain
+    if onchain:
+        lines.append("## On-Chain данные")
+        m = onchain.get("market", {})
+        if m:
+            lines.append(f"- Рыночная капитализация: ${_fmt_large(m.get('market_cap_usd'))}")
+            lines.append(f"- Объём за 24ч: ${_fmt_large(m.get('total_volume_24h'))}")
+            lines.append(f"- Изменение цены: 24ч {m.get('price_change_24h_pct','н/д'):.1f}%, "
+                         f"7д {m.get('price_change_7d_pct','н/д'):.1f}%, "
+                         f"30д {m.get('price_change_30d_pct','н/д'):.1f}%")
+            if m.get("ath_change_pct") is not None:
+                lines.append(f"- Отклонение от ATH: {m['ath_change_pct']:.1f}%")
+            if m.get("circulating_supply") and m.get("total_supply"):
+                pct_circ = m["circulating_supply"] / m["total_supply"] * 100
+                lines.append(f"- Оборотное предложение: {pct_circ:.1f}% от максимума")
+
+        der = onchain.get("derivatives", {})
+        if der:
+            lines.append(f"- Open Interest: ${_fmt_large(der.get('open_interest_usd'))}")
+            if "funding_rate_avg" in der:
+                lines.append(f"- Funding Rate (ср.): {der['funding_rate_avg']:+.4f}% → {der.get('funding_sentiment','')}")
+
+        ls = onchain.get("long_short", {})
+        if ls:
+            lines.append(f"- Long/Short Ratio: {ls.get('long_short_ratio')} "
+                         f"(лонги {ls.get('long_pct')}% / шорты {ls.get('short_pct')}%) — {ls.get('sentiment')}")
+
+        nf = onchain.get("netflow", {})
+        if nf:
+            lines.append(f"- Активных адресов 24ч: {_fmt_large(nf.get('active_addresses_24h'))}")
+            lines.append(f"- Транзакций 24ч: {_fmt_large(nf.get('tx_count_24h'))}")
+            if nf.get("avg_fee_usd"):
+                lines.append(f"- Средняя комиссия: ${nf['avg_fee_usd']:.2f}")
+        lines.append("")
+
     # Новости
     if news_items:
         lines.append("## Последние новости (7 дней)")
@@ -294,17 +545,25 @@ def _build_prompt(
                 break
 
     lines.append("---")
-    lines.append("""Дай анализ строго в следующем формате JSON (только JSON, без лишнего текста):
-{
-  "verdict": "ПОДТВЕРЖДАЕТ" | "ПРОТИВОРЕЧИТ" | "НЕЙТРАЛЬНО",
-  "confidence": 1..5,
-  "news_summary": "2-3 предложения о ключевых новостях",
-  "cot_summary": "1-2 предложения о позиционировании (или null)",
-  "macro_summary": "1-2 предложения о макро/сентименте (или null)",
-  "key_risks": ["риск 1", "риск 2", "риск 3"],
-  "key_catalysts": ["катализатор 1", "катализатор 2"],
-  "recommendation": "Краткий вывод 2-3 предложения"
-}""")
+
+    onchain_field = (
+        '\n  "onchain_summary": "2-3 предложения: как on-chain данные (funding rate, LS ratio, активность сети) соотносятся с сигналом",'
+        if onchain else ""
+    )
+    lines.append(
+        'Дай анализ строго в следующем формате JSON (только JSON, без лишнего текста):\n'
+        '{\n'
+        '  "verdict": "ПОДТВЕРЖДАЕТ" | "ПРОТИВОРЕЧИТ" | "НЕЙТРАЛЬНО",\n'
+        '  "confidence": 1..5,\n'
+        '  "news_summary": "2-3 предложения о ключевых новостях",\n'
+        '  "cot_summary": "1-2 предложения о позиционировании (или null)",\n'
+        '  "macro_summary": "1-2 предложения о макро/сентименте (или null)",'
+        + onchain_field + '\n'
+        '  "key_risks": ["риск 1", "риск 2", "риск 3"],\n'
+        '  "key_catalysts": ["катализатор 1", "катализатор 2"],\n'
+        '  "recommendation": "Краткий вывод 2-3 предложения"\n'
+        '}'
+    )
     return "\n".join(lines)
 
 
@@ -319,7 +578,7 @@ def _call_deepseek(prompt: str) -> dict:
             {"role": "user",   "content": prompt},
         ],
         "temperature": 0.3,
-        "max_tokens": 1200,
+        "max_tokens": 1500,
         "response_format": {"type": "json_object"},
     }
     headers = {
@@ -367,22 +626,30 @@ def run_analysis(
     except Exception as e:
         errors.append(f"COT: {e}")
 
-    # 2. Fear & Greed (только для крипто и общего рынка)
+    # 2. Fear & Greed (только для крипто)
     fear_greed = None
-    if asset_class in ("crypto",):
+    if asset_class == "crypto":
         try:
             fear_greed = fetch_fear_greed()
         except Exception as e:
             errors.append(f"F&G: {e}")
 
-    # 3. Новости
+    # 3. On-Chain (только для крипто)
+    onchain = None
+    if asset_class == "crypto":
+        try:
+            onchain = fetch_onchain(symbol)
+        except Exception as e:
+            errors.append(f"OnChain: {e}")
+
+    # 4. Новости
     news_items = []
     try:
         news_items = fetch_news(symbol, company_hint)
     except Exception as e:
         errors.append(f"News: {e}")
 
-    # 4. DeepSeek
+    # 5. DeepSeek
     verdict = {}
     try:
         prompt = _build_prompt(
@@ -392,6 +659,7 @@ def run_analysis(
             news_items=news_items,
             cot=cot,
             fear_greed=fear_greed,
+            onchain=onchain,
         )
         verdict = _call_deepseek(prompt)
     except Exception as e:
@@ -402,12 +670,12 @@ def run_analysis(
             "news_summary": "Не удалось получить анализ от AI.",
             "cot_summary": None,
             "macro_summary": None,
+            "onchain_summary": None,
             "key_risks": [],
             "key_catalysts": [],
             "recommendation": str(e),
         }
 
-    # новости в ответ — только заголовки + url (тексты большие)
     news_out = [{"title": n["title"], "url": n["url"]} for n in news_items]
 
     return {
@@ -418,6 +686,7 @@ def run_analysis(
         "news": news_out,
         "cot": cot,
         "fear_greed": fear_greed,
+        "onchain": onchain,
         "verdict": verdict,
         "errors": errors,
     }

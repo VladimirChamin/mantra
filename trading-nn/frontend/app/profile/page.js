@@ -39,138 +39,163 @@ export default function ProfilePage() {
   }
 
   if (!user) return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--ink)" }}>
-      <p style={{ color: "var(--muted)" }}>Загрузка…</p>
+    <div className="shell" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+      <span className="spinner" style={{ width: 24, height: 24 }} />
     </div>
   );
 
   const isAdmin = user.role === "admin";
+  const quotaPct = quota && !isAdmin ? Math.min(100, (quota.used / quota.limit) * 100) : 0;
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--ink)", padding: "0 0 60px" }}>
-      {/* topbar */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "18px 24px", borderBottom: "1px solid var(--line)",
-        background: "linear-gradient(var(--ink) 70%, transparent)",
-        position: "sticky", top: 0, zIndex: 20, backdropFilter: "blur(6px)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Link href="/" style={{ color: "var(--muted)", textDecoration: "none", fontSize: 13 }}>
-            ← Терминал
+    <div className="shell">
+
+      {/* topbar в стиле терминала */}
+      <div className="topbar">
+        <div className="brand">
+          <Link href="/" style={{ color: "var(--muted)", textDecoration: "none", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
+            ← MANTRA
           </Link>
-          <span style={{ fontFamily: "var(--display)", fontWeight: 600, letterSpacing: "0.12em", fontSize: 16, textTransform: "uppercase" }}>
-            Профиль
-          </span>
+          <span style={{ color: "var(--muted-2)", fontSize: 13 }}>/</span>
+          <h1 style={{ fontSize: 17 }}>Профиль</h1>
         </div>
-        <button onClick={logout} style={{
-          background: "var(--short-dim)", border: "1px solid #5c2730",
-          color: "var(--short)", borderRadius: 8, padding: "7px 16px",
-          fontSize: 13, cursor: "pointer", fontWeight: 600,
-        }}>
-          Выйти из аккаунта
-        </button>
+        <div className="status">
+          <button onClick={logout} style={{
+            fontSize: 12, padding: "5px 14px", borderRadius: 8,
+            border: "1px solid var(--line)", background: "transparent",
+            color: "var(--muted)", cursor: "pointer",
+          }}>
+            Выйти
+          </button>
+        </div>
       </div>
 
-      <div style={{ maxWidth: 640, margin: "0 auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 18, marginTop: 24 }}>
 
-        {/* Информация об аккаунте */}
-        <div className="card">
-          <h2>Аккаунт</h2>
-          <p className="sub">Ваши данные в системе Mantra Trading</p>
+        {/* ЛЕВАЯ КОЛОНКА */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {[
-              ["Имя", user.name || "—"],
-              ["Email", user.email],
-              ["Роль", isAdmin ? "Администратор" : "Пользователь"],
-              ["Дата регистрации", user.created_at
-                ? new Date(user.created_at).toLocaleDateString("ru-RU")
-                : "—"],
-            ].map(([label, value]) => (
-              <div key={label} style={{ background: "var(--ink)", border: "1px solid var(--line)", borderRadius: 10, padding: "12px 14px" }}>
-                <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 14, fontWeight: 500 }}>{value}</div>
+          {/* Аккаунт */}
+          <div className="card">
+            <h2>Аккаунт</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 14 }}>
+
+              <div style={{
+                width: 56, height: 56, borderRadius: "50%",
+                background: isAdmin ? "var(--primary)" : "var(--line)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 22, fontWeight: 700,
+                color: isAdmin ? "#fff" : "var(--muted)",
+              }}>
+                {(user.name || user.email || "?")[0].toUpperCase()}
               </div>
-            ))}
+
+              {[
+                ["Имя", user.name || "—"],
+                ["Email", user.email],
+                ["Роль", isAdmin ? "Администратор" : "Пользователь"],
+                ["Регистрация", user.created_at ? new Date(user.created_at).toLocaleDateString("ru-RU") : "—"],
+              ].map(([k, v]) => (
+                <div key={k}>
+                  <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{v}</div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Квота AI */}
+          {/* AI-квота */}
           {quota && (
-            <div style={{
-              marginTop: 14, background: "var(--ink)", border: "1px solid var(--line)",
-              borderRadius: 10, padding: "14px 16px",
-            }}>
-              <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-                AI-аналитика
+            <div className="card">
+              <h2>AI-анализ</h2>
+              <div style={{ marginTop: 12 }}>
+                {isAdmin ? (
+                  <div style={{ fontSize: 13, color: "var(--long)", fontWeight: 600 }}>∞ Без ограничений</div>
+                ) : (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, color: "var(--muted)" }}>Использовано в этом месяце</span>
+                      <span style={{ fontSize: 13, fontFamily: "var(--mono)", fontWeight: 600 }}>{quota.used} / {quota.limit}</span>
+                    </div>
+                    <div style={{ height: 5, background: "var(--line)", borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", borderRadius: 4,
+                        background: quota.remaining === 0 ? "var(--short)" : "var(--primary)",
+                        width: `${quotaPct}%`, transition: "width .3s",
+                      }} />
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 5 }}>
+                      Осталось: <strong style={{ color: quota.remaining === 0 ? "var(--short)" : "var(--long)" }}>{quota.remaining}</strong>
+                    </div>
+                  </>
+                )}
               </div>
-              {isAdmin ? (
-                <div style={{ fontSize: 13, color: "var(--long)" }}>Без ограничений (admin)</div>
-              ) : (
-                <>
-                  <div style={{ fontSize: 13, color: "var(--text)", marginBottom: 6 }}>
-                    Использовано {quota.used} из {quota.limit} запросов в этом месяце
-                  </div>
-                  <div style={{ height: 6, background: "var(--ink-2)", borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{
-                      height: "100%", borderRadius: 4,
-                      background: quota.remaining === 0 ? "var(--short)" : "var(--primary)",
-                      width: `${Math.min(100, (quota.used / quota.limit) * 100)}%`,
-                      transition: "width .3s",
-                    }} />
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                    Осталось: {quota.remaining ?? 0}
-                  </div>
-                </>
-              )}
             </div>
           )}
+
+          {/* Выход */}
+          <div className="card" style={{ border: "1px solid var(--short-dim)" }}>
+            <h2 style={{ color: "var(--short)" }}>Выход</h2>
+            <p className="sub">Завершить текущий сеанс</p>
+            <button onClick={logout} className="btn" style={{
+              background: "var(--short-dim)", border: "1px solid var(--short)",
+              color: "var(--short)",
+            }}>
+              Выйти из аккаунта
+            </button>
+          </div>
         </div>
 
-        {/* Смена пароля */}
+        {/* ПРАВАЯ КОЛОНКА */}
         <div className="card">
           <h2>Смена пароля</h2>
-          <p className="sub">Минимум 6 символов. Будьте осторожны — изменение немедленно вступает в силу.</p>
+          <p className="sub">Новый пароль вступает в силу немедленно. Минимум 6 символов.</p>
 
-          <form onSubmit={changePassword} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <form onSubmit={changePassword} style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 4 }}>
             {pwMsg && (
-              <div style={{ background: "rgba(45,212,167,.1)", border: "1px solid rgba(45,212,167,.3)", color: "var(--long)", borderRadius: 9, padding: "10px 14px", fontSize: 14 }}>
-                {pwMsg}
+              <div style={{
+                background: "var(--long-dim)", border: "1px solid var(--long)",
+                color: "var(--long)", borderRadius: 9, padding: "10px 14px", fontSize: 13,
+              }}>
+                ✓ {pwMsg}
               </div>
             )}
             {pwErr && <div className="error">{pwErr}</div>}
 
             <div className="field">
               <label>Текущий пароль</label>
-              <input type="password" value={curPw} onChange={e => setCurPw(e.target.value)}
-                placeholder="Введите текущий пароль" required />
+              <input type="password" value={curPw} onChange={e => setCurPw(e.target.value)} placeholder="Текущий пароль" required />
             </div>
+
             <div className="field">
               <label>Новый пароль</label>
-              <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)}
-                placeholder="Новый пароль (мин. 6 символов)" required />
+              <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Не менее 6 символов" required />
             </div>
+
             <div className="field">
               <label>Повторите новый пароль</label>
-              <input type="password" value={confPw} onChange={e => setConfPw(e.target.value)}
-                placeholder="Повторите новый пароль" required />
+              <input type="password" value={confPw} onChange={e => setConfPw(e.target.value)} placeholder="Повторите пароль" required />
             </div>
+
+            {newPw && confPw && newPw !== confPw && (
+              <div style={{ fontSize: 12, color: "var(--short)", marginTop: -6 }}>Пароли не совпадают</div>
+            )}
+            {newPw && confPw && newPw === confPw && newPw.length >= 6 && (
+              <div style={{ fontSize: 12, color: "var(--long)", marginTop: -6 }}>✓ Пароли совпадают</div>
+            )}
+
             <button type="submit" className="btn" disabled={pwLoading}>
               {pwLoading ? "Сохранение…" : "Сменить пароль"}
             </button>
           </form>
         </div>
-
-        {/* Опасная зона */}
-        <div className="card" style={{ border: "1px solid #5c2730" }}>
-          <h2 style={{ color: "var(--short)" }}>Выход</h2>
-          <p className="sub">Завершите текущий сеанс и вернитесь на страницу входа.</p>
-          <button onClick={logout} className="btn" style={{ background: "var(--short-dim)", border: "1px solid #5c2730", color: "var(--short)" }}>
-            Выйти из аккаунта
-          </button>
-        </div>
       </div>
+
+      <style>{`
+        @media (max-width: 640px) {
+          .profile-grid { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
     </div>
   );
 }
