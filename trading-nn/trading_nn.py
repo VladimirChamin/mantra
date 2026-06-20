@@ -1251,11 +1251,9 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         elif (1 - p_up) >= cfg.prob_threshold and fwd_ret < 0:
             direction = "SHORT"
 
-    # R:R геометрический: tp_dist / sl_dist (фиксировано мультипликаторами)
-    # Ожидаемый R:R с поправкой на вероятность: E[R:R] = p_up*tp / (1-p_up)*sl
+    # Прибыль/Риск = потенциальная прибыль / потенциальный убыток
     raw_rr = tp_dist / (sl_dist + 1e-9)
-    prob_dir = p_up if direction == "LONG" else (1 - p_up) if direction == "SHORT" else 0.5
-    exp_rr = round(prob_dir * tp_dist / ((1 - prob_dir + 1e-9) * sl_dist + 1e-9), 2)
+    exp_rr = round(raw_rr, 2)
 
     if direction != "FLAT" and raw_rr < cfg.min_rr:
         direction = "FLAT"

@@ -65,7 +65,7 @@ export default function SignalTicket({ signal }) {
 
       <div className="ticket-foot">
         <div>
-          <div className="k">Риск/прибыль</div>
+          <div className="k">Прибыль/Риск</div>
           <div className="v num">{signal.risk_reward ?? "—"}</div>
         </div>
         <div>
