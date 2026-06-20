@@ -38,24 +38,29 @@ if _env_path.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 import tensorflow as tf
 
 import trading_nn as tn
 import walkforward as wf
 import volatility as vol_module
+import auth
+import ai_analysis as ai_mod
 
 app = FastAPI(title="Trading NN Control API", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # для прод сузьте до адреса фронтенда
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# инициализируем БД при старте
+auth.init_db()
 
 # текущий источник данных (для отображения в UI)
 import os as _os
@@ -106,6 +111,20 @@ JOBS = JobManager()
 
 def _run_async(target, *args):
     threading.Thread(target=target, args=args, daemon=True).start()
+
+
+# =============================================================================
+# Auth модели
+# =============================================================================
+class RegisterReq(BaseModel):
+    email: str
+    name: str = ""
+    password: str
+    role: str = "user"
+
+class LoginReq(BaseModel):
+    email: str
+    password: str
 
 
 # =============================================================================
@@ -161,6 +180,14 @@ class TrainUniversalReq(BaseModel):
     asset_class: str = "stocks"
     interval: str = "1d"
     epochs: int = 40
+
+
+class AnalysisReq(BaseModel):
+    symbol: str
+    interval: str = "1d"
+    signal_direction: str = "UNKNOWN"
+    signal_entry: Optional[float] = None
+    company_hint: str = ""
 
 
 class DataSourceReq(BaseModel):
@@ -264,6 +291,83 @@ def _do_backtest(jid: str, req: BacktestReq):
 # =============================================================================
 # Эндпоинты
 # =============================================================================
+
+# --- Auth ---
+@app.post("/api/auth/register", tags=["auth"])
+def register(req: RegisterReq):
+    try:
+        user = auth.create_user(req.email, req.name, req.password, req.role)
+        token = auth.create_token(user)
+        return {"token": token, "user": _safe_user(user)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/auth/login", tags=["auth"])
+def login(req: LoginReq):
+    user = auth.get_user_by_email(req.email)
+    if not user or not auth.verify_password(req.password, user["password_hash"]):
+        raise HTTPException(401, "Неверный email или пароль")
+    token = auth.create_token(user)
+    return {"token": token, "user": _safe_user(user)}
+
+@app.get("/api/auth/me", tags=["auth"])
+def me(user: dict = Depends(auth.get_current_user)):
+    return _safe_user(user)
+
+@app.get("/api/auth/users", tags=["auth"])
+def users_list(user: dict = Depends(auth.require_admin)):
+    return {"users": auth.list_users()}
+
+
+class PatchUserReq(BaseModel):
+    ai_quota: Optional[int] = None
+    access_until: Optional[str] = None   # ISO datetime или "" для снятия лимита
+    role: Optional[str] = None
+
+
+@app.patch("/api/auth/users/{uid}", tags=["auth"])
+def patch_user(uid: int, req: PatchUserReq, _=Depends(auth.require_admin)):
+    """Изменить квоту, дату доступа или роль пользователя."""
+    try:
+        if req.ai_quota is not None:
+            auth.update_user_quota(uid, req.ai_quota)
+        if req.access_until is not None:
+            until = req.access_until.strip() or None
+            auth.update_user_access(uid, until)
+        if req.role is not None:
+            auth.update_user_role(uid, req.role)
+        user = auth.get_user_by_id(uid)
+        if not user:
+            raise HTTPException(404, "Пользователь не найден")
+        return user
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/auth/users/{uid}", tags=["auth"])
+def remove_user(uid: int, admin: dict = Depends(auth.require_admin)):
+    if uid == admin["id"]:
+        raise HTTPException(400, "Нельзя удалить самого себя")
+    user = auth.get_user_by_id(uid)
+    if not user:
+        raise HTTPException(404, "Пользователь не найден")
+    auth.delete_user(uid)
+    return {"ok": True}
+
+def _safe_user(u: dict) -> dict:
+    return {k: u[k] for k in ("id", "email", "name", "role", "created_at") if k in u}
+
+# --- История сигналов ---
+@app.get("/api/signals", tags=["signals"])
+def my_signals(user: dict = Depends(auth.get_current_user)):
+    rows = auth.get_signals(user["id"])
+    return {"signals": rows}
+
+@app.get("/api/signals/all", tags=["signals"])
+def all_signals(user: dict = Depends(auth.require_admin)):
+    return {"signals": auth.get_all_signals()}
+
+
 @app.get("/api/health")
 def health():
     models = _list_models()
@@ -405,14 +509,63 @@ def predict(req: PredictReq):
 
 
 @app.post("/api/forecast")
-def forecast(req: ForecastReq):
+def forecast(
+    req: ForecastReq,
+    current_user: dict = Depends(auth.get_current_user),
+):
     cfg = tn.make_config(req.symbol, req.interval, period=req.period)
     try:
-        return tn.forecast(cfg, steps=req.steps, history=req.history)
+        result = tn.forecast(cfg, steps=req.steps, history=req.history)
+        # сохраняем сигнал в историю
+        if result.get("signal"):
+            sig = dict(result["signal"])
+            sig["interval"] = req.interval
+            auth.save_signal(current_user["id"], sig)
+        return result
     except FileNotFoundError:
         raise HTTPException(404, "Модель не найдена. Сначала обучите её.")
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+@app.get("/api/ai_quota", tags=["analysis"])
+def ai_quota(current_user: dict = Depends(auth.get_current_user)):
+    """Текущий остаток AI-запросов пользователя."""
+    return auth.get_ai_quota_info(current_user)
+
+
+@app.post("/api/analysis", tags=["analysis"])
+def run_analysis(
+    req: AnalysisReq,
+    current_user: dict = Depends(auth.get_current_user),
+):
+    """
+    Фундаментальный AI-анализ: COT, новости (Google Search + скрапинг), DeepSeek.
+    Возвращает verdict — подтверждает / противоречит / нейтрально к сигналу нейросети.
+    User: 10 запросов в месяц. Admin: без лимита.
+    """
+    ok, used, limit = auth.check_ai_quota(current_user)
+    if not ok:
+        raise HTTPException(429, f"Исчерпан лимит AI-анализа: {used}/{limit} в этом месяце")
+
+    # определяем класс актива для передачи в модуль
+    asset_class = tn.detect_asset_class(req.symbol)
+
+    try:
+        result = ai_mod.run_analysis(
+            symbol=req.symbol,
+            signal_direction=req.signal_direction,
+            signal_entry=req.signal_entry,
+            company_hint=req.company_hint,
+            asset_class=asset_class,
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+    # списываем квоту только при успешном завершении
+    auth.consume_ai_quota(current_user["id"], req.symbol)
+    result["quota"] = auth.get_ai_quota_info(current_user)
+    return result
 
 
 @app.post("/api/volatility")

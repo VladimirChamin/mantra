@@ -2,9 +2,18 @@
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function getToken() {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("token");
+}
+
 async function req(path, options = {}) {
+  const token = getToken();
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...options,
   });
   const data = await res.json().catch(() => ({}));
@@ -35,4 +44,10 @@ export const api = {
     req("/api/forecast", { method: "POST", body: JSON.stringify(payload) }),
   job: (id) => req(`/api/jobs/${id}`),
   jobs: () => req("/api/jobs"),
+  mySignals: () => req("/api/signals"),
+  allSignals: () => req("/api/signals/all"),
+  me: () => req("/api/auth/me"),
+  aiQuota: () => req("/api/ai_quota"),
+  analysis: (payload) =>
+    req("/api/analysis", { method: "POST", body: JSON.stringify(payload) }),
 };

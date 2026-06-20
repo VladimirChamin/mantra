@@ -24,6 +24,16 @@ trading-nn/frontend/node_modules/
 trading-nn/frontend/.next/
 trading-nn/frontend/.env.local
 
+# База данных (содержит хеши паролей пользователей)
+trading-nn/data/
+*.db
+*.sqlite3
+
+# Landing
+landing/node_modules/
+landing/.next/
+landing/.env.local
+
 # Логи
 *.log
 npm-debug.log*

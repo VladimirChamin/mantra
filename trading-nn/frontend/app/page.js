@@ -2,11 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { getUser, logout } from "@/lib/auth";
 import SignalTicket from "@/components/SignalTicket";
 import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
 import EquityChart from "@/components/EquityChart";
 import JobLog from "@/components/JobLog";
+import AIAnalysis from "@/components/AIAnalysis";
+import AdminPanel from "@/components/AdminPanel";
 
 const DEFAULT_INTERVALS = ["1d", "4h", "1h"];
 
@@ -20,10 +23,14 @@ function Field({ label, children }) {
 }
 
 export default function Dashboard() {
-  const [tab, setTab] = useState("train");
+  const [tab, setTab] = useState("signal");
   const [health, setHealth] = useState(null);
   const [online, setOnline] = useState(false);
   const [meta, setMeta] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [signals, setSignals] = useState([]);
+  const [aiQuota, setAiQuota] = useState(null);
+  const isAdmin = currentUser?.role === "admin";
 
   // источник данных
   const [provider, setProvider] = useState("yfinance");
@@ -102,9 +109,14 @@ export default function Dashboard() {
     }
   }
   useEffect(() => {
+    const u = getUser();
+    setCurrentUser(u);
+    if (u?.role !== "admin") setTab("signal");
     refreshHealth();
     api.meta().then(setMeta).catch(() => {});
     api.assetClasses().then(setAssetClasses).catch(() => {});
+    api.mySignals().then(d => setSignals(d.signals || [])).catch(() => {});
+    api.aiQuota().then(setAiQuota).catch(() => {});
     const t = setInterval(refreshHealth, 10000);
     return () => clearInterval(t);
   }, []);
@@ -190,6 +202,7 @@ export default function Dashboard() {
       const f = await api.forecast({ ...pred, steps: 10, history: 50 });
       setFc(f);
       setSignal(f.signal);
+      api.mySignals().then(d => setSignals(d.signals || [])).catch(() => {});
     } catch (e) { setErr(e.message); }
     setBusy(false);
   }
@@ -216,21 +229,39 @@ export default function Dashboard() {
             <span className={`dot ${online ? "live" : "down"}`} />{" "}
             {online ? "backend на связи" : "backend недоступен"}
           </span>
+          {currentUser && (
+            <span style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
+              <span style={{ fontSize: 12, opacity: 0.7 }}>
+                {currentUser.name || currentUser.email}
+                <span style={{
+                  marginLeft: 5, fontSize: 10, padding: "1px 6px",
+                  borderRadius: 4, background: isAdmin ? "var(--accent)" : "var(--border)",
+                  color: isAdmin ? "#fff" : "var(--muted2)", verticalAlign: "middle",
+                }}>{isAdmin ? "admin" : "user"}</span>
+              </span>
+              <button onClick={logout} style={{
+                fontSize: 11, padding: "3px 10px", borderRadius: 5,
+                border: "1px solid var(--border)", background: "transparent",
+                color: "var(--muted2)", cursor: "pointer",
+              }}>Выход</button>
+            </span>
+          )}
         </div>
       </div>
 
       <div className="tabs">
-        {[["train", "Обучение"], ["classes", "Классы активов"], ["backtest", "Walk-forward"], ["signal", "Сигнал"]].map(
-          ([k, label]) => (
-            <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
-              {label}
-            </button>
-          )
-        )}
+        {(isAdmin
+          ? [["train", "Обучение"], ["classes", "Классы активов"], ["backtest", "Walk-forward"], ["signal", "Сигнал"], ["admin", "Админка"]]
+          : [["signal", "Сигнал"]]
+        ).map(([k, label]) => (
+          <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* источник данных */}
-      <div className="card" style={{ marginBottom: 18 }}>
+      {/* источник данных — только для admin */}
+      {isAdmin && <div className="card" style={{ marginBottom: 18 }}>
         <span className="eyebrow">Источник данных</span>
 
         {/* карточки-провайдеры */}
@@ -298,9 +329,9 @@ export default function Dashboard() {
 
         {srcMsg && <div className="eyebrow" style={{ color: "var(--long)", marginTop: 8 }}>{srcMsg}</div>}
         {srcErr && <div className="error" style={{ marginTop: 8 }}>{srcErr}</div>}
-      </div>
+      </div>}
 
-      {tab === "train" && (
+      {tab === "train" && isAdmin && (
         <div className="grid">
           <div className="card">
             <h2>Параметры обучения</h2>
@@ -344,7 +375,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {tab === "classes" && (
+      {tab === "classes" && isAdmin && (
         <>
           {/* карточки классов */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
@@ -423,7 +454,7 @@ export default function Dashboard() {
         </>
       )}
 
-      {tab === "backtest" && (
+      {tab === "backtest" && isAdmin && (
         <>
           <div className="grid">
             <div className="card">
@@ -479,6 +510,16 @@ export default function Dashboard() {
         </>
       )}
 
+      {tab === "admin" && isAdmin && (
+        <div className="card">
+          <h2>Управление пользователями</h2>
+          <p className="sub">
+            Изменяйте квоты AI-аналитики, сроки доступа, роли и удаляйте аккаунты.
+          </p>
+          <AdminPanel currentUserId={currentUser?.id} />
+        </div>
+      )}
+
       {tab === "signal" && (
         <>
           <div className="grid">
@@ -514,6 +555,56 @@ export default function Dashboard() {
             </p>
             <ForecastChart data={fc} />
           </div>
+
+          <div className="card" style={{ marginTop: 18 }}>
+            <h2>AI-аналитика</h2>
+            <p className="sub">
+              DeepSeek анализирует новости (Google Search), COT-позиции (CFTC) и макрофон
+              — и выносит вердикт: подтверждает или опровергает сигнал нейросети.
+            </p>
+            <AIAnalysis
+              symbol={pred.symbol}
+              signal={signal}
+              quota={aiQuota}
+              onQuotaUpdate={setAiQuota}
+            />
+          </div>
+
+          {signals.length > 0 && (
+            <div className="card" style={{ marginTop: 18 }}>
+              <h2>История прогнозов</h2>
+              <p className="sub">Ваши последние запросы, сохранённые в базе данных.</p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ opacity: 0.5, textAlign: "left" }}>
+                      {["Дата", "Символ", "ТФ", "Направление", "Вход", "SL", "TP", "P(up)"].map(h => (
+                        <th key={h} style={{ padding: "6px 10px", borderBottom: "1px solid var(--border)", fontWeight: 500 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {signals.map((s, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td style={{ padding: "7px 10px", opacity: 0.6 }}>
+                          {s.created_at ? new Date(s.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                        </td>
+                        <td style={{ padding: "7px 10px", fontWeight: 600 }}>{s.symbol || "—"}</td>
+                        <td style={{ padding: "7px 10px", opacity: 0.6 }}>{s.interval || "—"}</td>
+                        <td style={{ padding: "7px 10px", color: s.direction === "LONG" ? "var(--long)" : s.direction === "SHORT" ? "var(--short)" : "var(--muted2)", fontWeight: 600 }}>
+                          {s.direction || "—"}
+                        </td>
+                        <td style={{ padding: "7px 10px" }}>{s.entry != null ? s.entry.toLocaleString("ru-RU") : "—"}</td>
+                        <td style={{ padding: "7px 10px", color: "var(--short)" }}>{s.stop_loss != null ? s.stop_loss.toLocaleString("ru-RU") : "—"}</td>
+                        <td style={{ padding: "7px 10px", color: "var(--long)" }}>{s.take_profit != null ? s.take_profit.toLocaleString("ru-RU") : "—"}</td>
+                        <td style={{ padding: "7px 10px", opacity: 0.8 }}>{s.prob_up != null ? `${(s.prob_up * 100).toFixed(1)}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
