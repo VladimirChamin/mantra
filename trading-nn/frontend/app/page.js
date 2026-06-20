@@ -44,11 +44,11 @@ export default function Dashboard() {
   const [assetClasses, setAssetClasses] = useState(null);
   const [activeClass, setActiveClass] = useState("stocks");
   const [classTrainParams, setClassTrainParams] = useState({
-    stocks:    { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
-    crypto:    { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
-    bonds:     { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
-    forex:     { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
-    commodity: { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
+    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
+    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
+    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
+    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
 
   // формы (дефолты — дневной таймфрейм, индекс Мосбиржи)
@@ -178,6 +178,7 @@ export default function Dashboard() {
         asset_class: activeClass,
         interval: p.interval || "1d",
         epochs: +(p.epochs || 40),
+        period: p.period || "6y",
         entry_offset_mult: +(p.entry_offset_mult ?? 0),
       });
       watch(r.job_id);
@@ -518,7 +519,7 @@ export default function Dashboard() {
                   style={{ width: "100%", resize: "vertical", fontFamily: "monospace", fontSize: 13 }}
                 />
               </Field>
-              <div className="row2" style={{ marginTop: 10 }}>
+              <div className="row3" style={{ marginTop: 10 }}>
                 <Field label="Таймфрейм">
                   <select value={classTrainParams[activeClass]?.interval || "1d"}
                     onChange={(e) => setClassTrainParams(p => ({
@@ -526,6 +527,12 @@ export default function Dashboard() {
                     }))}>
                     {intervals.map((i) => <option key={i}>{i}</option>)}
                   </select>
+                </Field>
+                <Field label="История">
+                  <input className="num" value={classTrainParams[activeClass]?.period || "6y"}
+                    onChange={(e) => setClassTrainParams(p => ({
+                      ...p, [activeClass]: { ...p[activeClass], period: e.target.value }
+                    }))} />
                 </Field>
                 <Field label="Эпохи">
                   <input className="num" value={classTrainParams[activeClass]?.epochs || 40}

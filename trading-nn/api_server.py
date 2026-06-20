@@ -292,6 +292,7 @@ class TrainUniversalReq(BaseModel):
     asset_class: str = "stocks"
     interval: str = "1d"
     epochs: int = 40
+    period: Optional[str] = None
     entry_offset_mult: Optional[float] = None  # 0 = маркет, >0 = BUYSTOP/SELLSTOP
 
 
@@ -366,7 +367,8 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
         symbols = req.symbols or tn.ASSET_CLASS_META.get(
             req.asset_class.lower(), {}).get("default_symbols", [])
         mode = "BUYSTOP/SELLSTOP" if (req.entry_offset_mult or 0) > 0 else "Маркет"
-        JOBS.log(jid, f"вход={mode}")
+        period_str = req.period or "(пресет)"
+        JOBS.log(jid, f"вход={mode} история={period_str}")
         tn.train_universal(
             symbols=symbols,
             interval=req.interval,
@@ -376,6 +378,7 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             log_fn=lambda msg: JOBS.log(jid, msg),
             cancel_event=JOBS.cancel_event(jid),
             entry_offset_mult=req.entry_offset_mult,
+            period=req.period,
         )
 
         if JOBS.is_cancelled(jid):

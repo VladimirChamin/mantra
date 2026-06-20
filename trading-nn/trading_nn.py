@@ -1029,7 +1029,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
                     epochs: int = 60, model_dir: str = "models",
                     asset_class: str = "UNIVERSAL",
                     extra_callbacks=None, log_fn=None, cancel_event=None,
-                    entry_offset_mult: float | None = None):
+                    entry_offset_mult: float | None = None,
+                    period: str | None = None):
     """
     Обучает модель класса активов на пуле инструментов.
 
@@ -1058,6 +1059,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
                           if k in Config.__dataclass_fields__})
     if entry_offset_mult is not None:
         cfg_proto.entry_offset_mult = entry_offset_mult
+    if period is not None:
+        cfg_proto.period = period
 
     all_X_tr, all_X_va = [], []
     all_yp_tr, all_yr_tr, all_yv_tr, all_yf_tr = [], [], [], []
@@ -1068,7 +1071,7 @@ def train_universal(symbols: list[str], interval: str = "1d",
     for sym in symbols:
         _log(f"[universal] Загрузка {sym} {interval}…")
         cfg_i = make_config(sym, interval, epochs=epochs, model_dir=model_dir,
-                            entry_offset_mult=entry_offset_mult)
+                            entry_offset_mult=entry_offset_mult, period=period)
         try:
             df = load_ohlcv(cfg_i)
             # В universal-режиме НЕ используем index_df (RS у каждого инструмента
