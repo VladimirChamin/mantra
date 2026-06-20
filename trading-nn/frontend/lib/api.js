@@ -62,6 +62,7 @@ export const api = {
     req(`/api/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
   // AUC Monitor
   getModelMetrics: () => req("/api/models/metrics"),
+  deleteModel: (tag) => req(`/api/models/${tag}`, { method: "DELETE" }),
   refreshModelMetrics: (tag) => req(`/api/models/${tag}/refresh_metrics`, { method: "POST" }),
   getAucMonitor: () => req("/api/auc_monitor"),
   setAucMonitor: (payload) => req("/api/auc_monitor", { method: "POST", body: JSON.stringify(payload) }),

@@ -3,9 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@/lib/api";
 
-// Пороги совпадают с trading_nn.py
-const THRESH_OK     = 0.56;
-const THRESH_WARN   = 0.54;
+const THRESH_OK   = 0.56;
+const THRESH_WARN = 0.54;
 
 function statusColor(status) {
   if (status === "ok")       return "var(--long)";
@@ -24,9 +23,7 @@ function statusLabel(status) {
 function AucBar({ auc }) {
   if (auc == null) return <span style={{ opacity: 0.35, fontSize: 12 }}>нет данных</span>;
   const pct   = Math.max(0, Math.min(100, (auc - 0.48) / (0.72 - 0.48) * 100));
-  const color = auc >= THRESH_OK   ? "var(--long)"
-              : auc >= THRESH_WARN ? "var(--amber)"
-              : "var(--short)";
+  const color = auc >= THRESH_OK ? "var(--long)" : auc >= THRESH_WARN ? "var(--amber)" : "var(--short)";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div style={{ flex: 1, height: 6, background: "var(--ink-2)", borderRadius: 3, overflow: "hidden" }}>
@@ -39,7 +36,6 @@ function AucBar({ auc }) {
   );
 }
 
-// Мини-спарклайн истории AUC
 function AucSparkline({ history }) {
   if (!history?.length) return null;
   const vals = history.map(h => h.val_auc);
@@ -59,13 +55,119 @@ function AucSparkline({ history }) {
   );
 }
 
+// ── Модальное окно подтверждения удаления ──────────────────────────────────
+function DeleteModal({ model, onConfirm, onCancel, deleting }) {
+  if (!model) return null;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
+      animation: "fadeIn .15s ease",
+    }}>
+      <div style={{
+        background: "var(--panel)", borderRadius: 16, padding: "32px 28px",
+        width: "100%", maxWidth: 420, boxShadow: "0 24px 60px rgba(0,0,0,0.3)",
+        border: "1px solid var(--line)", animation: "slideUp .18s ease",
+      }}>
+        {/* иконка */}
+        <div style={{
+          width: 52, height: 52, borderRadius: "50%",
+          background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 22, marginBottom: 18,
+        }}>
+          🗑
+        </div>
+
+        <h3 style={{ margin: "0 0 8px", fontSize: 17, fontWeight: 700 }}>
+          Удалить модель?
+        </h3>
+        <p style={{ margin: "0 0 6px", fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+          Будут удалены все файлы модели:
+        </p>
+
+        {/* карточка модели */}
+        <div style={{
+          background: "var(--ink-2)", borderRadius: 10, padding: "12px 16px",
+          margin: "12px 0 20px", border: "1px solid var(--line)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{
+              fontFamily: "var(--mono)", fontWeight: 700, fontSize: 15,
+              color: "var(--text)",
+            }}>{model.symbol}</span>
+            <span style={{
+              padding: "1px 8px", borderRadius: 5, fontSize: 11,
+              background: "var(--line)", color: "var(--muted)", fontFamily: "var(--mono)",
+            }}>{model.interval}</span>
+            {model.val_auc != null && (
+              <span style={{
+                marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 12,
+                color: statusColor(model.status), fontWeight: 600,
+              }}>AUC {model.val_auc.toFixed(4)}</span>
+            )}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)", lineHeight: 1.8 }}>
+            {[".keras", ".pkl", "_config.json", "_metrics.json", "_feature_importance.json"].map(s => (
+              <div key={s} style={{ fontFamily: "var(--mono)" }}>
+                <span style={{ opacity: 0.45, marginRight: 4 }}>·</span>
+                {model.tag}{s}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p style={{ margin: "0 0 24px", fontSize: 12, color: "var(--short)", fontWeight: 500 }}>
+          Это действие необратимо. Восстановить модель можно только повторным обучением.
+        </p>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            style={{
+              flex: 1, padding: "11px 0", borderRadius: 10, fontSize: 14, fontWeight: 600,
+              border: "1px solid var(--line)", background: "transparent",
+              color: "var(--muted)", cursor: "pointer", fontFamily: "var(--body)",
+            }}
+          >
+            Отмена
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            style={{
+              flex: 1, padding: "11px 0", borderRadius: 10, fontSize: 14, fontWeight: 600,
+              border: "none", background: "var(--short)", color: "#fff",
+              cursor: deleting ? "not-allowed" : "pointer", opacity: deleting ? 0.7 : 1,
+              fontFamily: "var(--body)", display: "flex", alignItems: "center",
+              justifyContent: "center", gap: 6,
+            }}
+          >
+            {deleting ? <><span className="spinner" style={{ width: 14, height: 14, borderColor: "rgba(255,255,255,0.3)", borderTopColor: "#fff" }} /> Удаление…</> : "Удалить"}
+          </button>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes fadeIn  { from { opacity: 0 } to { opacity: 1 } }
+        @keyframes slideUp { from { transform: translateY(16px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+      `}</style>
+    </div>
+  );
+}
+
+// ── Основной компонент ────────────────────────────────────────────────────────
 export default function ModelMetrics() {
-  const [metrics, setMetrics]     = useState([]);
-  const [monitor, setMonitor]     = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefresh]  = useState({});
-  const [checking, setChecking]   = useState(false);
-  const [saved, setSaved]         = useState(false);
+  const [metrics, setMetrics]       = useState([]);
+  const [monitor, setMonitor]       = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState({});
+  const [checking, setChecking]     = useState(false);
+  const [saved, setSaved]           = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null); // модель для удаления
+  const [deleting, setDeleting]     = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,15 +184,37 @@ export default function ModelMetrics() {
 
   useEffect(() => { load(); }, [load]);
 
+  // закрытие по Escape
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const handler = (e) => { if (e.key === "Escape") setDeleteTarget(null); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [deleteTarget]);
+
   async function handleRefresh(tag) {
-    setRefresh(r => ({ ...r, [tag]: true }));
+    setRefreshing(r => ({ ...r, [tag]: true }));
     try {
       const updated = await api.refreshModelMetrics(tag);
       setMetrics(ms => ms.map(m => m.tag === tag ? { ...m, ...updated } : m));
     } catch (e) {
       alert(e.message);
     } finally {
-      setRefresh(r => ({ ...r, [tag]: false }));
+      setRefreshing(r => ({ ...r, [tag]: false }));
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.deleteModel(deleteTarget.tag);
+      setMetrics(ms => ms.filter(m => m.tag !== deleteTarget.tag));
+      setDeleteTarget(null);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -98,7 +222,7 @@ export default function ModelMetrics() {
     setChecking(true);
     try {
       await api.checkAucNow();
-      setTimeout(load, 3000); // подождать и перезагрузить
+      setTimeout(load, 3000);
     } catch (e) {
       alert(e.message);
     } finally {
@@ -122,6 +246,13 @@ export default function ModelMetrics() {
 
   return (
     <div>
+      <DeleteModal
+        model={deleteTarget}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => !deleting && setDeleteTarget(null)}
+        deleting={deleting}
+      />
+
       {/* Сводка */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
         {[
@@ -247,14 +378,31 @@ export default function ModelMetrics() {
                   {m.updated ? m.updated.replace("T", " ").slice(0, 16) : "—"}
                 </td>
                 <td style={{ padding: "10px 10px" }}>
-                  <button onClick={() => handleRefresh(m.tag)} disabled={refreshing[m.tag]}
-                    title="Пересчитать AUC"
-                    style={{
-                      padding: "4px 10px", borderRadius: 6, fontSize: 11, cursor: "pointer",
-                      border: "1px solid var(--line)", background: "transparent", color: "var(--muted)",
-                    }}>
-                    {refreshing[m.tag] ? "…" : "↻"}
-                  </button>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => handleRefresh(m.tag)}
+                      disabled={refreshing[m.tag]}
+                      title="Пересчитать AUC"
+                      style={{
+                        padding: "4px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer",
+                        border: "1px solid var(--line)", background: "transparent", color: "var(--muted)",
+                      }}
+                    >
+                      {refreshing[m.tag] ? "…" : "↻"}
+                    </button>
+                    <button
+                      onClick={() => setDeleteTarget(m)}
+                      title="Удалить модель"
+                      style={{
+                        padding: "4px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer",
+                        border: "1px solid rgba(239,68,68,0.3)",
+                        background: "rgba(239,68,68,0.07)",
+                        color: "var(--short)",
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

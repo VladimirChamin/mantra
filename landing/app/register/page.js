@@ -27,8 +27,11 @@ export default function RegisterPage() {
       if (!res.ok) throw new Error(data.detail || "Ошибка регистрации");
       localStorage.setItem("token", data.token);
       localStorage.setItem("user", JSON.stringify(data.user));
-      document.cookie = `token=${data.token}; path=/; max-age=${7 * 24 * 3600}; samesite=lax`;
-      window.location.href = APP;
+      const params = new URLSearchParams({
+        token: data.token,
+        user: JSON.stringify(data.user),
+      });
+      window.location.href = `${APP}/auth/callback?${params.toString()}`;
     } catch (e) {
       setError(e.message);
     } finally {

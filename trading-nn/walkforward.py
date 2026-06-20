@@ -40,7 +40,7 @@ import trading_nn as tn
 # =============================================================================
 def _prepare(df: pd.DataFrame, cfg: tn.Config):
     feats = tn.add_features(df).replace([np.inf, -np.inf], np.nan)
-    p_up, fwd_ret, fwd_vol, valid = tn.triple_barrier_targets(feats, cfg)
+    p_up, fwd_ret, fwd_vol, p_fill, valid = tn.triple_barrier_targets(feats, cfg)
 
     exclude = {"open", "high", "low", "close", "volume", "atr"}
     feature_cols = [c for c in feats.columns if c not in exclude]
@@ -57,13 +57,13 @@ def _prepare(df: pd.DataFrame, cfg: tn.Config):
         "atr": feats["atr"].to_numpy(dtype=np.float64),
         "index": df.index,
     }
-    return X_raw, row_ok, p_up, fwd_ret, fwd_vol, feature_cols, prices
+    return X_raw, row_ok, p_up, fwd_ret, fwd_vol, p_fill, feature_cols, prices
 
 
 def _make_sequences(X_scaled, row_ok, lookback, lo, hi, targets=None):
     """Окна, заканчивающиеся в [lo, hi). Возвращает X, индексы концов и (опц.) цели."""
     Xs, end_idx = [], []
-    yp, yr, yv = [], [], []
+    yp, yr, yv, yf = [], [], [], []
     for t in range(max(lookback - 1, lo), hi):
         if not row_ok[t]:
             continue
@@ -72,13 +72,16 @@ def _make_sequences(X_scaled, row_ok, lookback, lo, hi, targets=None):
             continue
         Xs.append(w); end_idx.append(t)
         if targets is not None:
-            yp.append(targets[0][t]); yr.append(targets[1][t]); yv.append(targets[2][t])
+            yp.append(targets[0][t]); yr.append(targets[1][t])
+            yv.append(targets[2][t])
+            yf.append(targets[3][t] if len(targets) > 3 else 1.0)
     Xs = np.asarray(Xs, dtype=np.float32)
     end_idx = np.asarray(end_idx, dtype=np.int64)
     if targets is not None:
         return Xs, end_idx, (np.asarray(yp, np.float32),
                              np.asarray(yr, np.float32),
-                             np.asarray(yv, np.float32))
+                             np.asarray(yv, np.float32),
+                             np.asarray(yf, np.float32))
     return Xs, end_idx
 
 
@@ -160,7 +163,7 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
     """
     if df is None:
         df = tn.load_ohlcv(cfg)
-    X_raw, row_ok, p_up, fwd_ret, fwd_vol, feature_cols, prices = _prepare(df, cfg)
+    X_raw, row_ok, p_up, fwd_ret, fwd_vol, p_fill, feature_cols, prices = _prepare(df, cfg)
     n = len(df)
     L = cfg.lookback
 
@@ -198,7 +201,7 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
         X_scaled = scaler.transform(np.nan_to_num(X_raw))
 
         Xtr, _, ytr = _make_sequences(X_scaled, row_ok, L, tr_s, tr_e,
-                                      targets=(p_up, fwd_ret, fwd_vol))
+                                      targets=(p_up, fwd_ret, fwd_vol, p_fill))
         if len(Xtr) < 50:
             continue
 
@@ -208,8 +211,8 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
         wp, wn = 0.5 / (pos + 1e-9), 0.5 / (1 - pos + 1e-9)
         sw = np.where(ytr[0] == 1, wp, wn).astype(np.float32)
         ones = np.ones_like(sw)
-        model.fit(Xtr, [ytr[0], ytr[1], ytr[2]],
-                  sample_weight=[sw, ones, ones],
+        model.fit(Xtr, [ytr[0], ytr[1], ytr[2], ytr[3]],
+                  sample_weight=[sw, ones, ones, ones],
                   epochs=epochs, batch_size=cfg.batch_size, verbose=0,
                   callbacks=[EarlyStopping(monitor="loss", patience=4,
                                            restore_best_weights=True)])

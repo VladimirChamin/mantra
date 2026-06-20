@@ -624,8 +624,8 @@ export default function Dashboard() {
           .mobile-menu { display: block; position: fixed; inset: 0; z-index: 200; }
           .mobile-menu-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.3); }
           .mobile-menu-drawer {
-            position: absolute; top: 0; left: 0; bottom: 0; width: 270px;
-            background: var(--panel); box-shadow: 4px 0 24px rgba(0,0,0,.12);
+            position: absolute; top: 0; right: 0; bottom: 0; width: 270px;
+            background: var(--panel); box-shadow: -4px 0 24px rgba(0,0,0,.12);
             display: flex; flex-direction: column; overflow-y: auto;
           }
           .mobile-menu-header {

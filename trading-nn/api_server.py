@@ -211,6 +211,11 @@ class JobManager:
             ev = self._cancel_flags.get(jid)
         return ev.is_set() if ev else False
 
+    def cancel_event(self, jid: str):
+        """Возвращает threading.Event флага отмены для передачи в train()."""
+        with self.lock:
+            return self._cancel_flags.get(jid)
+
 
 JOBS = JobManager()
 
@@ -327,7 +332,8 @@ def _do_train(jid: str, req: TrainReq):
         JOBS.log(jid, f"горизонт={cfg.horizon} окно={cfg.lookback} история={cfg.period}")
 
         tn.train(cfg, warm_start=req.warm_start,
-                 extra_callbacks=[_make_stop_callback(jid, req.epochs)])
+                 extra_callbacks=[_make_stop_callback(jid, req.epochs)],
+                 cancel_event=JOBS.cancel_event(jid))
 
         if JOBS.is_cancelled(jid):
             JOBS.update(jid, status="cancelled", progress=JOBS.get(jid)["progress"])
@@ -339,8 +345,11 @@ def _do_train(jid: str, req: TrainReq):
                     result={"message": "Модель обучена и сохранена", "signal": signal})
         JOBS.log(jid, "Готово")
     except Exception as e:
-        JOBS.update(jid, status="error", error=str(e))
-        JOBS.log(jid, f"ОШИБКА: {e}")
+        tb = traceback.format_exc()
+        JOBS.update(jid, status="error", error=f"{type(e).__name__}: {e}")
+        JOBS.log(jid, f"ОШИБКА: {type(e).__name__}: {e}")
+        for line in tb.splitlines()[-8:]:
+            JOBS.log(jid, line)
         traceback.print_exc()
 
 
@@ -359,6 +368,7 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             asset_class=asset_class,
             extra_callbacks=[_make_stop_callback(jid, req.epochs)],
             log_fn=lambda msg: JOBS.log(jid, msg),
+            cancel_event=JOBS.cancel_event(jid),
         )
 
         if JOBS.is_cancelled(jid):
@@ -371,8 +381,11 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
                             "asset_class": asset_class, "symbols": symbols, "interval": req.interval})
         JOBS.log(jid, "Готово")
     except Exception as e:
-        JOBS.update(jid, status="error", error=str(e))
-        JOBS.log(jid, f"ОШИБКА: {e}")
+        tb = traceback.format_exc()
+        JOBS.update(jid, status="error", error=f"{type(e).__name__}: {e}")
+        JOBS.log(jid, f"ОШИБКА: {type(e).__name__}: {e}")
+        for line in tb.splitlines()[-8:]:
+            JOBS.log(jid, line)
         traceback.print_exc()
 
 
@@ -985,6 +998,23 @@ def set_auc_monitor(req: AucMonitorSettingsReq, _=Depends(auth.require_admin)):
 def all_model_metrics(_=Depends(auth.require_admin)):
     """Возвращает AUC и статус для всех обученных моделей."""
     return {"metrics": tn.get_all_metrics()}
+
+
+@app.delete("/api/models/{tag}", tags=["models"])
+def delete_model(tag: str, _=Depends(auth.require_admin)):
+    """Удаляет все файлы модели (.keras, .pkl, _config.json, _metrics.json, _feature_importance.json)."""
+    model_dir = "models"
+    suffixes = ["_model.keras", "_scaler.pkl", "_config.json",
+                "_metrics.json", "_feature_importance.json"]
+    deleted = []
+    for suf in suffixes:
+        path = os.path.join(model_dir, f"{tag}{suf}")
+        if os.path.exists(path):
+            os.remove(path)
+            deleted.append(path)
+    if not deleted:
+        raise HTTPException(404, f"Модель {tag} не найдена")
+    return {"ok": True, "deleted": deleted}
 
 
 @app.post("/api/models/{tag}/refresh_metrics", tags=["models"])

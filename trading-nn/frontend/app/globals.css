@@ -193,10 +193,10 @@ button, input, select { font-family: inherit; }
   box-shadow: 0 1px 3px rgba(15,24,40,.06);
 }
 .ticket-head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 16px 20px; border-bottom: 1px solid var(--line);
 }
-.ticket-head .sym { font-family: var(--display); font-size: 17px; letter-spacing: 0.06em; }
+.ticket-head .sym { font-family: var(--display); font-size: 17px; letter-spacing: 0.06em; margin-right: auto; }
 .badge {
   font-family: var(--mono); font-weight: 700; font-size: 13px;
   padding: 6px 12px; border-radius: 8px; letter-spacing: 0.08em;
@@ -204,6 +204,13 @@ button, input, select { font-family: inherit; }
 .badge.long { background: var(--long-dim); color: var(--long); }
 .badge.short { background: var(--short-dim); color: var(--short); }
 .badge.flat { background: #1b2740; color: var(--muted); }
+.badge.order-type { font-size: 11px; padding: 4px 8px; opacity: 0.85; }
+
+.pending-banner {
+  padding: 10px 20px; font-size: 12px; letter-spacing: 0.04em;
+  background: rgba(251,191,36,.07); color: #fbbf24;
+  border-bottom: 1px solid rgba(251,191,36,.15);
+}
 
 .level-row {
   display: flex; align-items: baseline; justify-content: space-between;
@@ -285,19 +292,16 @@ button, input, select { font-family: inherit; }
   .shell { padding: 0 14px 60px; }
   .profile-grid { grid-template-columns: 1fr !important; }
 
-  /* topbar: две строки на мобиле */
+  /* topbar: бренд слева, гамбургер справа */
   .topbar {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0;
     padding: 14px 0 12px;
   }
-  .status {
-    flex-wrap: wrap;
-    gap: 8px;
-    font-size: 11px;
-  }
-  .src-pill { font-size: 11px; }
+  .status { display: none; }
+  .src-pill { display: none; }
   .brand h1 { font-size: 16px; }
 
   /* табы — горизонтальный скролл */

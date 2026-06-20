@@ -70,6 +70,9 @@ class Config:
     horizon: int = 6              # горизонт прогноза в барах
     tp_atr_mult: float = 2.5      # тейк = entry +/- tp_atr_mult * ATR
     sl_atr_mult: float = 1.5      # стоп = entry -/+ sl_atr_mult * ATR
+    # --- отложенный ордер (BUYSTOP / SELLSTOP) ---
+    entry_offset_mult: float = 0.3  # BUYSTOP = close + offset*ATR, 0 = маркет
+    fill_prob_threshold: float = 0.45  # мин. p_fill для выдачи сигнала
     # --- вход модели ---
     lookback: int = 50            # длина окна (timesteps) на вход сети
     # --- обучение ---
@@ -93,11 +96,14 @@ class Config:
 # с учётом числа баров в торговом дне (D1≈1, H4≈3, H1≈13 баров/день с вечеркой).
 TIMEFRAME_PRESETS = {
     "1d": dict(horizon=6,  lookback=50, period="6y",
-               tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.56),
+               tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.56,
+               entry_offset_mult=0.3, fill_prob_threshold=0.45),
     "4h": dict(horizon=12, lookback=64, period="3y",
-               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.57),
+               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.57,
+               entry_offset_mult=0.3, fill_prob_threshold=0.45),
     "1h": dict(horizon=24, lookback=96, period="2y",
-               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.58),
+               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.58,
+               entry_offset_mult=0.3, fill_prob_threshold=0.45),
 }
 
 # Ликвидные инструменты Мосбиржи (подсказки для интерфейса; можно ввести любой тикер).
@@ -595,7 +601,7 @@ def _make_htf_summary(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     htf["htf_macd"]     = macd_ / c
     htf["htf_vol_z"]    = (
         agg["volume"].pct_change().rolling(10)
-        .apply(lambda x: (x[-1] - x[:-1].mean()) / (x[:-1].std() + 1e-9) if len(x) > 1 else 0)
+        .apply(lambda x: (x[-1] - x[:-1].mean()) / (x[:-1].std() + 1e-9) if len(x) > 1 else 0, raw=True)
     )
 
     # forward-fill на индекс основного ТФ (значение недели/дня держится до следующего)
@@ -615,54 +621,148 @@ def _merge_htf_features(df: pd.DataFrame, htf_df: pd.DataFrame,
 
 def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
     """
-    Метод тройного барьера (López de Prado):
-    для каждой точки ставим верхний (TP) и нижний (SL) барьеры на расстоянии
-    кратном ATR и смотрим, какой сработает первым на горизонте `horizon`.
+    Метод тройного барьера с поддержкой отложенных ордеров BUYSTOP/SELLSTOP.
+
+    Логика (при entry_offset_mult > 0):
+      - LONG: ордер BUYSTOP = close + offset*ATR. Сначала ждём касания ордера
+        (high >= buystop). Если за horizon баров цена не дошла — отмена (p_fill=0).
+        Если ордер сработал — запускаем тройной барьер от цены срабатывания.
+      - SHORT: SELLSTOP = close - offset*ATR, аналогично (low <= sellstop).
+      - При entry_offset_mult == 0: поведение как раньше (маркет-вход по close).
 
     Возвращает:
-        p_up    — 1, если первым достигнут верхний барьер (или таймаут закрыт в плюс)
-        fwd_ret — фактическая доходность за горизонт
-        fwd_vol — реализованная волатильность за горизонт (для прогноза уровней)
-        valid   — маска валидных (с полной разметкой) точек
+        p_up    — 1 если TP достигнут (при условии что ордер сработал), иначе 0
+        fwd_ret — доходность от фактической цены входа до бара закрытия горизонта
+        fwd_vol — реализованная волатильность на горизонте
+        p_fill  — 1 если ордер сработал в течение horizon, 0 если отменён
+        valid   — маска валидных точек
     """
     close = df["close"].to_numpy()
-    high = df["high"].to_numpy()
-    low = df["low"].to_numpy()
-    atr = df["atr"].to_numpy()
-    ret1 = df["close"].pct_change().to_numpy()
+    high  = df["high"].to_numpy()
+    low   = df["low"].to_numpy()
+    atr   = df["atr"].to_numpy()
+    ret1  = df["close"].pct_change().to_numpy()
     n = len(df)
     H = cfg.horizon
+    offset = cfg.entry_offset_mult  # 0 = маркет
 
-    p_up = np.zeros(n, dtype=np.float32)
+    p_up    = np.zeros(n, dtype=np.float32)
     fwd_ret = np.zeros(n, dtype=np.float32)
     fwd_vol = np.zeros(n, dtype=np.float32)
-    valid = np.zeros(n, dtype=bool)
+    p_fill  = np.zeros(n, dtype=np.float32)
+    valid   = np.zeros(n, dtype=bool)
 
     for i in range(n - H):
         a = atr[i]
         if not np.isfinite(a) or a <= 0:
             continue
-        entry = close[i]
-        up = entry + cfg.tp_atr_mult * a
-        dn = entry - cfg.sl_atr_mult * a
 
-        outcome = None
-        for j in range(1, H + 1):
-            if high[i + j] >= up:
-                outcome = 1
-                break
-            if low[i + j] <= dn:
-                outcome = 0
-                break
-        if outcome is None:  # таймаут — размечаем по знаку итоговой доходности
-            outcome = 1 if close[i + H] > entry else 0
+        base_price = close[i]
+        vol = np.nanstd(ret1[i + 1: i + H + 1])
 
-        p_up[i] = outcome
-        fwd_ret[i] = (close[i + H] - entry) / entry
-        fwd_vol[i] = np.nanstd(ret1[i + 1: i + H + 1])
-        valid[i] = True
+        if offset == 0:
+            # ── Маркет-вход (оригинальная логика) ────────────────────────────
+            # Считаем для обоих направлений усреднённо — модель сама выберет.
+            # p_fill = 1 всегда (вход гарантирован).
+            entry = base_price
+            tp = entry + cfg.tp_atr_mult * a
+            sl = entry - cfg.sl_atr_mult * a
+            outcome = None
+            for j in range(1, H + 1):
+                if high[i + j] >= tp:
+                    outcome = 1; break
+                if low[i + j] <= sl:
+                    outcome = 0; break
+            if outcome is None:
+                outcome = 1 if close[i + H] > entry else 0
+            p_up[i]    = outcome
+            fwd_ret[i] = (close[i + H] - entry) / entry
+            fwd_vol[i] = vol
+            p_fill[i]  = 1.0
+            valid[i]   = True
 
-    return p_up, fwd_ret, fwd_vol, valid
+        else:
+            # ── Отложенный ордер: симулируем оба направления, берём лучшее ───
+            # LONG (BUYSTOP): ордер срабатывает когда high >= buystop_level
+            buystop  = base_price + offset * a
+            sellstop = base_price - offset * a
+
+            # --- LONG ---
+            long_fill_bar = None
+            for j in range(1, H + 1):
+                if high[i + j] >= buystop:
+                    long_fill_bar = j
+                    break
+
+            long_outcome = 0.0
+            long_ret     = 0.0
+            long_filled  = 0.0
+            if long_fill_bar is not None:
+                long_filled = 1.0
+                entry_l = buystop
+                tp_l = entry_l + cfg.tp_atr_mult * a
+                sl_l = entry_l - cfg.sl_atr_mult * a
+                remaining = H - long_fill_bar
+                outcome_l = None
+                for k in range(1, remaining + 1):
+                    jj = i + long_fill_bar + k
+                    if jj >= n: break
+                    if high[jj] >= tp_l: outcome_l = 1; break
+                    if low[jj]  <= sl_l: outcome_l = 0; break
+                if outcome_l is None:
+                    end_bar = min(i + H, n - 1)
+                    outcome_l = 1 if close[end_bar] > entry_l else 0
+                long_outcome = float(outcome_l)
+                long_ret     = (close[min(i + H, n - 1)] - entry_l) / entry_l
+
+            # --- SHORT ---
+            short_fill_bar = None
+            for j in range(1, H + 1):
+                if low[i + j] <= sellstop:
+                    short_fill_bar = j
+                    break
+
+            short_outcome = 0.0
+            short_ret     = 0.0
+            short_filled  = 0.0
+            if short_fill_bar is not None:
+                short_filled = 1.0
+                entry_s = sellstop
+                tp_s = entry_s - cfg.tp_atr_mult * a
+                sl_s = entry_s + cfg.sl_atr_mult * a
+                remaining = H - short_fill_bar
+                outcome_s = None
+                for k in range(1, remaining + 1):
+                    jj = i + short_fill_bar + k
+                    if jj >= n: break
+                    if low[jj]  <= tp_s: outcome_s = 1; break
+                    if high[jj] >= sl_s: outcome_s = 0; break
+                if outcome_s is None:
+                    end_bar = min(i + H, n - 1)
+                    outcome_s = 1 if close[end_bar] < entry_s else 0
+                short_outcome = float(outcome_s)
+                short_ret     = (entry_s - close[min(i + H, n - 1)]) / entry_s
+
+            # p_fill = среднее вероятностей срабатывания (обоих направлений)
+            # p_up   = взвешенный итог: сколько из сработавших сделок прибыльны
+            filled_any = long_filled + short_filled
+            p_fill[i]  = min(filled_any, 1.0)   # 1 если хоть одно сработало
+
+            if filled_any > 0:
+                # p_up: доля прибыльных среди сработавших сделок
+                profit_sum = long_filled * long_outcome + short_filled * short_outcome
+                p_up[i]    = profit_sum / filled_any
+                # fwd_ret: взвешенная доходность
+                fwd_ret[i] = (long_filled * long_ret + short_filled * short_ret) / filled_any
+            else:
+                # оба ордера отменены: p_up = нейтральный (0.5), ret = 0
+                p_up[i]    = 0.5
+                fwd_ret[i] = 0.0
+
+            fwd_vol[i] = vol
+            valid[i]   = True
+
+    return p_up, fwd_ret, fwd_vol, p_fill, valid
 
 
 # =============================================================================
@@ -681,7 +781,7 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
     """
     feats = add_features(df, interval=cfg.interval,
                          index_df=index_df, htf_df=htf_df)
-    p_up, fwd_ret, fwd_vol, valid = triple_barrier_targets(feats, cfg)
+    p_up, fwd_ret, fwd_vol, p_fill, valid = triple_barrier_targets(feats, cfg)
 
     # выбираем фичи (исключаем сырые цены/объём и абсолютный ATR)
     exclude = {"open", "high", "low", "close", "volume", "atr"}
@@ -708,7 +808,7 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
     X_scaled = scaler.transform(np.nan_to_num(X_raw))
 
     L = cfg.lookback
-    Xs, yp, yr, yv, end_idx = [], [], [], [], []
+    Xs, yp, yr, yv, yf, end_idx = [], [], [], [], [], []
     for t in range(L - 1, n):
         if not row_ok[t]:
             continue
@@ -716,18 +816,20 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
         if not np.isfinite(window).all():
             continue
         Xs.append(window)
-        yp.append(p_up[t]); yr.append(fwd_ret[t]); yv.append(fwd_vol[t])
+        yp.append(p_up[t]); yr.append(fwd_ret[t])
+        yv.append(fwd_vol[t]); yf.append(p_fill[t])
         end_idx.append(t)
 
     Xs = np.asarray(Xs, dtype=np.float32)
     yp = np.asarray(yp, dtype=np.float32)
     yr = np.asarray(yr, dtype=np.float32)
     yv = np.asarray(yv, dtype=np.float32)
+    yf = np.asarray(yf, dtype=np.float32)
     end_idx = np.asarray(end_idx)
 
     is_train = end_idx < split
     data = {
-        "X": Xs, "p_up": yp, "fwd_ret": yr, "fwd_vol": yv,
+        "X": Xs, "p_up": yp, "fwd_ret": yr, "fwd_vol": yv, "p_fill": yf,
         "is_train": is_train, "end_idx": end_idx,
         "feature_cols": feature_cols,
     }
@@ -804,17 +906,18 @@ def build_model(lookback: int, n_features: int, cfg: Config) -> Model:
     x = layers.Dense(64, activation="gelu")(x)
     x = layers.BatchNormalization()(x)
 
-    # --- Три выходные головы (интерфейс не изменился) ---
-    out_p = layers.Dense(1, activation="sigmoid",  name="p_up")(x)     # вероятность
-    out_r = layers.Dense(1, activation="linear",   name="fwd_ret")(x)  # доходность
+    # --- Четыре выходные головы ---
+    out_p = layers.Dense(1, activation="sigmoid",  name="p_up")(x)     # вероятность роста
+    out_r = layers.Dense(1, activation="linear",   name="fwd_ret")(x)  # ожидаемая доходность
     out_v = layers.Dense(1, activation="softplus", name="fwd_vol")(x)  # волатильность > 0
+    out_f = layers.Dense(1, activation="sigmoid",  name="p_fill")(x)   # вероятность срабатывания ордера
 
-    model = Model(inp, [out_p, out_r, out_v])
+    model = Model(inp, [out_p, out_r, out_v, out_f])
     model.compile(
         optimizer=Adam(cfg.learning_rate),
-        loss=["binary_crossentropy", "huber", "huber"],
-        loss_weights=[1.0, 1.0, 0.5],
-        metrics=[["accuracy", tf.keras.metrics.AUC(name="auc")], [], []],
+        loss=["binary_crossentropy", "huber", "huber", "binary_crossentropy"],
+        loss_weights=[1.0, 1.0, 0.5, 0.8],
+        metrics=[["accuracy", tf.keras.metrics.AUC(name="auc")], [], [], ["accuracy"]],
     )
     return model
 
@@ -832,18 +935,21 @@ def _paths(cfg: Config):
     }
 
 
-def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
+def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
+          cancel_event=None):
     df = load_ohlcv(cfg)
     index_df = _try_load_index(cfg.symbol, cfg.interval)
     htf_df   = _try_load_htf(cfg)
     data, scaler = build_dataset(df, cfg, index_df=index_df, htf_df=htf_df)
 
     Xtr, Xva = data["X"][data["is_train"]], data["X"][~data["is_train"]]
-    ytr = [data["p_up"][data["is_train"]], data["fwd_ret"][data["is_train"]], data["fwd_vol"][data["is_train"]]]
-    yva = [data["p_up"][~data["is_train"]], data["fwd_ret"][~data["is_train"]], data["fwd_vol"][~data["is_train"]]]
+    tr, va = data["is_train"], ~data["is_train"]
+    ytr = [data["p_up"][tr], data["fwd_ret"][tr], data["fwd_vol"][tr], data["p_fill"][tr]]
+    yva = [data["p_up"][va], data["fwd_ret"][va], data["fwd_vol"][va], data["p_fill"][va]]
 
+    fill_rate = data["p_fill"][tr].mean()
     print(f"[train] train={len(Xtr)}  val={len(Xva)}  features={Xtr.shape[-1]}  "
-          f"baseline p_up={data['p_up'][data['is_train']].mean():.3f}")
+          f"baseline p_up={data['p_up'][tr].mean():.3f}  fill_rate={fill_rate:.3f}")
 
     paths = _paths(cfg)
     if warm_start and os.path.exists(paths["model"]):
@@ -853,13 +959,12 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
     else:
         model = build_model(cfg.lookback, Xtr.shape[-1], cfg)
 
-    # балансировка классов p_up через sample_weight (class_weight не работает
-    # для мультивыходных моделей). Веса применяем только к голове p_up.
+    # балансировка классов p_up через sample_weight
     pos = ytr[0].mean()
     w_pos, w_neg = 0.5 / (pos + 1e-9), 0.5 / (1 - pos + 1e-9)
     sw_p = np.where(ytr[0] == 1, w_pos, w_neg).astype(np.float32)
     ones_tr = np.ones_like(sw_p)
-    sample_weight = [sw_p, ones_tr, ones_tr]
+    sample_weight = [sw_p, ones_tr, ones_tr, ones_tr]
 
     callbacks = [
         EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True),
@@ -870,12 +975,16 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
         callbacks.extend(extra_callbacks)
 
     model.fit(
-        Xtr, [ytr[0], ytr[1], ytr[2]],
-        validation_data=(Xva, [yva[0], yva[1], yva[2]]),
+        Xtr, [ytr[0], ytr[1], ytr[2], ytr[3]],
+        validation_data=(Xva, [yva[0], yva[1], yva[2], yva[3]]),
         epochs=cfg.epochs, batch_size=cfg.batch_size,
         sample_weight=sample_weight,
         callbacks=callbacks, verbose=2,
     )
+
+    # если отменено — не тратить время на сохранение метрик
+    if cancel_event and cancel_event.is_set():
+        return model, scaler
 
     model.save(paths["model"])
     joblib.dump(scaler, paths["scaler"])
@@ -892,7 +1001,7 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
 def train_universal(symbols: list[str], interval: str = "1d",
                     epochs: int = 60, model_dir: str = "models",
                     asset_class: str = "UNIVERSAL",
-                    extra_callbacks=None, log_fn=None):
+                    extra_callbacks=None, log_fn=None, cancel_event=None):
     """
     Обучает модель класса активов на пуле инструментов.
 
@@ -921,8 +1030,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
                           if k in Config.__dataclass_fields__})
 
     all_X_tr, all_X_va = [], []
-    all_yp_tr, all_yr_tr, all_yv_tr = [], [], []
-    all_yp_va, all_yr_va, all_yv_va = [], [], []
+    all_yp_tr, all_yr_tr, all_yv_tr, all_yf_tr = [], [], [], []
+    all_yp_va, all_yr_va, all_yv_va, all_yf_va = [], [], [], []
     feature_cols = None
     scalers = {}
 
@@ -949,9 +1058,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
         tr, va = data["is_train"], ~data["is_train"]
         all_X_tr.append(data["X"][tr]);  all_X_va.append(data["X"][va])
         all_yp_tr.append(data["p_up"][tr]); all_yr_tr.append(data["fwd_ret"][tr])
-        all_yv_tr.append(data["fwd_vol"][tr])
+        all_yv_tr.append(data["fwd_vol"][tr]); all_yf_tr.append(data["p_fill"][tr])
         all_yp_va.append(data["p_up"][va]); all_yr_va.append(data["fwd_ret"][va])
-        all_yv_va.append(data["fwd_vol"][va])
+        all_yv_va.append(data["fwd_vol"][va]); all_yf_va.append(data["p_fill"][va])
         _log(f"[universal] {sym}: train={tr.sum()} val={va.sum()}")
 
     if not all_X_tr:
@@ -959,14 +1068,17 @@ def train_universal(symbols: list[str], interval: str = "1d",
 
     Xtr = np.concatenate(all_X_tr)
     Xva = np.concatenate(all_X_va)
-    ytr = [np.concatenate(all_yp_tr), np.concatenate(all_yr_tr), np.concatenate(all_yv_tr)]
-    yva = [np.concatenate(all_yp_va), np.concatenate(all_yr_va), np.concatenate(all_yv_va)]
+    ytr = [np.concatenate(all_yp_tr), np.concatenate(all_yr_tr),
+           np.concatenate(all_yv_tr), np.concatenate(all_yf_tr)]
+    yva = [np.concatenate(all_yp_va), np.concatenate(all_yr_va),
+           np.concatenate(all_yv_va), np.concatenate(all_yf_va)]
 
     # перемешиваем train (val оставляем упорядоченным — не критично для оценки)
     idx = np.random.permutation(len(Xtr))
     Xtr, ytr = Xtr[idx], [y[idx] for y in ytr]
 
-    _log(f"[universal] Итого: train={len(Xtr)} val={len(Xva)} features={Xtr.shape[-1]}")
+    fill_rate = ytr[3].mean()
+    _log(f"[universal] Итого: train={len(Xtr)} val={len(Xva)} features={Xtr.shape[-1]}  fill_rate={fill_rate:.3f}")
 
     pos = ytr[0].mean()
     w_pos, w_neg = 0.5 / (pos + 1e-9), 0.5 / (1 - pos + 1e-9)
@@ -988,9 +1100,12 @@ def train_universal(symbols: list[str], interval: str = "1d",
         Xtr, ytr,
         validation_data=(Xva, yva),
         epochs=cfg_proto.epochs, batch_size=cfg_proto.batch_size,
-        sample_weight=[sw_p, ones_tr, ones_tr],
+        sample_weight=[sw_p, ones_tr, ones_tr, ones_tr],
         callbacks=callbacks, verbose=2,
     )
+
+    if cancel_event and cancel_event.is_set():
+        return model, scalers
 
     model.save(paths["model"])
     # сохраняем scaler первого инструмента как «эталонный»
@@ -1091,50 +1206,98 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
 
     L = cfg.lookback
     window = X_scaled[-L:][None, ...]
-    p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in model.predict(window, verbose=0)]
+    outputs = model.predict(window, verbose=0)
+
+    # Поддерживаем старые модели с 3 выходами и новые с 4
+    if len(outputs) >= 4:
+        p_up, fwd_ret, fwd_vol, p_fill = [float(o[0, 0]) for o in outputs[:4]]
+    else:
+        p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in outputs[:3]]
+        p_fill = 1.0  # старая модель — всегда маркет-вход
 
     price = float(df["close"].iloc[-1])
     atr = float(feats["atr"].iloc[-1])
 
-    # SL/TP строим через ATR — это стабильная мера волатильности в единицах цены.
-    # fwd_vol (σ лог-доходности) используем только для конуса прогноза.
-    # Дополнительно клэмпим ATR: не менее 0.1% и не более 5% от цены.
+    # Клэмпим ATR: не менее 0.1% и не более 5% от цены
     atr_clamped = float(np.clip(atr, 0.001 * price, 0.05 * price))
+    offset = cfg.entry_offset_mult  # смещение ордера
 
-    sl_dist = cfg.sl_atr_mult * atr_clamped
-    tp_dist = cfg.tp_atr_mult * atr_clamped
+    # SL/TP: берём максимум из ATR и прогнозируемой волатильности (fwd_vol в ед. цены)
+    vol_abs = max(fwd_vol * price, 0.2 * atr_clamped)
+    sl_dist = cfg.sl_atr_mult * vol_abs
+    tp_dist = cfg.tp_atr_mult * vol_abs
 
-    # выбор направления
+    # выбор направления (с учётом p_fill — комбинированная вероятность)
     direction = "FLAT"
-    if p_up >= cfg.prob_threshold and fwd_ret > 0:
-        direction = "LONG"
-    elif (1 - p_up) >= cfg.prob_threshold and fwd_ret < 0:
-        direction = "SHORT"
-    rr = tp_dist / (sl_dist + 1e-9)
+    order_type = "MARKET"
+
+    if offset > 0:
+        # Отложенный ордер: фильтруем по p_fill * p_direction >= threshold
+        if p_up * p_fill >= cfg.prob_threshold * cfg.fill_prob_threshold and fwd_ret > 0:
+            direction = "LONG"
+            order_type = "BUYSTOP"
+        elif (1 - p_up) * p_fill >= cfg.prob_threshold * cfg.fill_prob_threshold and fwd_ret < 0:
+            direction = "SHORT"
+            order_type = "SELLSTOP"
+    else:
+        # Маркет-вход (оригинальная логика)
+        if p_up >= cfg.prob_threshold and fwd_ret > 0:
+            direction = "LONG"
+        elif (1 - p_up) >= cfg.prob_threshold and fwd_ret < 0:
+            direction = "SHORT"
+
+    # R:R геометрический: tp_dist / sl_dist (фиксировано мультипликаторами)
+    # Ожидаемый R:R с поправкой на вероятность: E[R:R] = p_up*tp / (1-p_up)*sl
+    raw_rr = tp_dist / (sl_dist + 1e-9)
+    prob_dir = p_up if direction == "LONG" else (1 - p_up) if direction == "SHORT" else 0.5
+    exp_rr = round(prob_dir * tp_dist / ((1 - prob_dir + 1e-9) * sl_dist + 1e-9), 2)
+
+    if direction != "FLAT" and raw_rr < cfg.min_rr:
+        direction = "FLAT"
+        order_type = "MARKET"
 
     if direction == "LONG":
-        entry, sl, tp = price, price - sl_dist, price + tp_dist
+        entry = price + offset * atr_clamped if offset > 0 else price
+        sl = entry - sl_dist
+        tp = entry + tp_dist
     elif direction == "SHORT":
-        entry, sl, tp = price, price + sl_dist, price - tp_dist
+        entry = price - offset * atr_clamped if offset > 0 else price
+        sl = entry + sl_dist
+        tp = entry - tp_dist
     else:
-        entry = sl = tp = price
+        entry = price + offset * atr_clamped if offset > 0 else price
+        sl = tp = price
+        exp_rr = 0.0
 
-    # фильтр по минимальному R:R
-    if direction != "FLAT" and rr < cfg.min_rr:
-        direction = "FLAT"
+    # дедлайн исполнения ордера (горизонт в барах от текущего момента)
+    bar_index = df.index[-1]
+    fill_deadline = None
+    if offset > 0 and direction != "FLAT":
+        try:
+            freq_map = {"1d": "B", "4h": "4h", "1h": "1h"}
+            freq = freq_map.get(cfg.interval, cfg.interval)
+            fill_deadline = str(
+                pd.bdate_range(start=bar_index, periods=cfg.horizon + 1, freq=freq)[-1]
+            )
+        except Exception:
+            fill_deadline = None
 
     signal = {
-        "time": str(df.index[-1]),
+        "time": str(bar_index),
         "symbol": cfg.symbol,
         "direction": direction,
+        "order_type": order_type,
         "entry": round(entry, 2),
         "stop_loss": round(sl, 2),
         "take_profit": round(tp, 2),
         "prob_up": round(p_up, 3),
+        "p_fill": round(p_fill, 3),
         "exp_return": round(fwd_ret, 4),
         "exp_vol": round(fwd_vol, 4),
-        "risk_reward": round(rr, 2),
+        "risk_reward": exp_rr,
         "confidence": round(max(p_up, 1 - p_up), 3),
+        "fill_deadline": fill_deadline,
+        "entry_offset_atr": round(offset * atr_clamped, 4) if offset > 0 else 0,
     }
     return signal
 
@@ -1159,7 +1322,8 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
 
     X_scaled, feats = _infer_features(cfg, df, scaler)
     window = X_scaled[-cfg.lookback:][None, ...]
-    p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in model.predict(window, verbose=0)]
+    _outs = model.predict(window, verbose=0)
+    p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in _outs[:3]]
 
     price0 = float(df["close"].iloc[-1])
     per_bar_vol = max(fwd_vol, 1e-4)
