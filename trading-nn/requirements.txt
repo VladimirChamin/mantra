@@ -1,0 +1,18 @@
+# --- ядро нейросети ---
+tensorflow>=2.16
+scikit-learn>=1.3
+pandas>=2.0
+numpy>=1.24
+joblib>=1.3
+
+# --- источники данных ---
+yfinance>=0.2.40        # источник по умолчанию (можно заменить)
+# T-Invest SDK: официальный пакет временно на карантине в PyPI, ставьте из исходников:
+#   pip install "git+https://github.com/RussianInvestments/invest-python.git"
+
+# --- расписание дообучения ---
+APScheduler>=3.10
+
+# --- backend для веб-интерфейса ---
+fastapi>=0.110
+uvicorn[standard]>=0.27

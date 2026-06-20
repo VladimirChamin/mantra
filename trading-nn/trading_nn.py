@@ -1,0 +1,1013 @@
+"""
+trading_nn.py
+=============
+Нейросеть (TensorFlow/Keras) для генерации торговых сигналов на финансовых рынках.
+
+Что выдаёт система на инференсе:
+    - direction : LONG / SHORT / FLAT (нет сделки)
+    - entry     : цена входа
+    - stop_loss : уровень стоп-лосса
+    - take_profit: уровень тейк-профита
+    - вероятность отработки + соотношение риск/прибыль (R:R)
+
+Идея архитектуры (почему именно так — см. README):
+    Модель НЕ угадывает три произвольных уровня цены напрямую. Это ненадёжно.
+    Вместо этого модель решает вероятностную задачу (что хорошо умеют нейросети),
+    выдавая три величины:
+        p_up      — вероятность, что цена раньше дойдёт до тейка, чем до стопа (мет. Triple-Barrier)
+        fwd_ret   — ожидаемая доходность на горизонте
+        fwd_vol   — прогноз волатильности на горизонте
+    А конкретные entry / SL / TP вычисляются детерминированно из прогноза
+    волатильности (адаптивные уровни). Так уровни сами подстраиваются под рынок.
+
+Режимы запуска (CLI):
+    python trading_nn.py train    --symbol BTC-USD --interval 1h
+    python trading_nn.py predict   --symbol BTC-USD --interval 1h
+    python trading_nn.py retrain   --symbol BTC-USD --interval 1h   # дообучение по расписанию
+
+ВАЖНО / ДИСКЛЕЙМЕР:
+    Это образовательный инструмент. Он не гарантирует прибыль. Перед любым
+    реальным использованием обязательны бэктест на out-of-sample, walk-forward
+    валидация, учёт комиссий/проскальзывания и управление риском. Прошлые
+    результаты модели не гарантируют будущих. Это не финансовая рекомендация.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from dataclasses import dataclass, asdict, field
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import joblib
+
+from sklearn.preprocessing import StandardScaler
+from volatility import add_vol_features
+
+import tensorflow as tf
+from tensorflow.keras import layers, Model, Input
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+
+tf.get_logger().setLevel("ERROR")
+np.random.seed(42)
+tf.random.set_seed(42)
+
+
+# =============================================================================
+# 1. КОНФИГУРАЦИЯ
+# =============================================================================
+@dataclass
+class Config:
+    # --- данные ---
+    symbol: str = "IMOEX"
+    interval: str = "1d"          # таймфрейм (D1 по умолчанию)
+    period: str = "6y"            # сколько истории грузить
+    # --- разметка целей (Triple-Barrier) ---
+    horizon: int = 6              # горизонт прогноза в барах
+    tp_atr_mult: float = 2.5      # тейк = entry +/- tp_atr_mult * ATR
+    sl_atr_mult: float = 1.5      # стоп = entry -/+ sl_atr_mult * ATR
+    # --- вход модели ---
+    lookback: int = 50            # длина окна (timesteps) на вход сети
+    # --- обучение ---
+    val_fraction: float = 0.15    # доля валидации (хронологически последняя)
+    epochs: int = 60
+    batch_size: int = 128
+    learning_rate: float = 1e-3
+    # --- генерация сигнала на инференсе ---
+    prob_threshold: float = 0.56  # минимальная p_up (или 1-p_up) для входа
+    min_rr: float = 1.2           # минимальное R:R, иначе FLAT
+    # --- сохранение ---
+    model_dir: str = "models"
+    feature_cols: list = field(default_factory=list)  # заполняется автоматически
+
+    @property
+    def tag(self) -> str:
+        return f"{self.symbol}_{self.interval}".replace("/", "")
+
+
+# Пресеты под таймфреймы Мосбиржи. Горизонт/окно/глубина истории подобраны
+# с учётом числа баров в торговом дне (D1≈1, H4≈3, H1≈13 баров/день с вечеркой).
+TIMEFRAME_PRESETS = {
+    "1d": dict(horizon=6,  lookback=50, period="6y",
+               tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.56),
+    "4h": dict(horizon=12, lookback=64, period="3y",
+               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.57),
+    "1h": dict(horizon=24, lookback=96, period="2y",
+               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.58),
+}
+
+# Ликвидные инструменты Мосбиржи (подсказки для интерфейса; можно ввести любой тикер).
+MOEX_INSTRUMENTS = [
+    {"ticker": "IMOEX", "name": "Индекс Мосбиржи", "kind": "index"},
+    {"ticker": "RTSI",  "name": "Индекс РТС", "kind": "index"},
+    {"ticker": "SBER",  "name": "Сбербанк", "kind": "share"},
+    {"ticker": "GAZP",  "name": "Газпром", "kind": "share"},
+    {"ticker": "LKOH",  "name": "Лукойл", "kind": "share"},
+    {"ticker": "GMKN",  "name": "Норникель", "kind": "share"},
+    {"ticker": "ROSN",  "name": "Роснефть", "kind": "share"},
+    {"ticker": "NVTK",  "name": "Новатэк", "kind": "share"},
+    {"ticker": "TATN",  "name": "Татнефть", "kind": "share"},
+    {"ticker": "MGNT",  "name": "Магнит", "kind": "share"},
+    {"ticker": "MTSS",  "name": "МТС", "kind": "share"},
+    {"ticker": "ALRS",  "name": "Алроса", "kind": "share"},
+    {"ticker": "CHMF",  "name": "Северсталь", "kind": "share"},
+    {"ticker": "PLZL",  "name": "Полюс", "kind": "share"},
+    {"ticker": "SNGS",  "name": "Сургутнефтегаз", "kind": "share"},
+    {"ticker": "VTBR",  "name": "ВТБ", "kind": "share"},
+    {"ticker": "MOEX",  "name": "Московская биржа", "kind": "share"},
+    {"ticker": "PHOR",  "name": "ФосАгро", "kind": "share"},
+    {"ticker": "RUAL",  "name": "Русал", "kind": "share"},
+    {"ticker": "YDEX",  "name": "Яндекс", "kind": "share"},
+]
+
+
+# Окна walk-forward по таймфреймам (train_bars, test_bars). Учитывают, что
+# на D1 баров мало (~250/год), а на H1 — много.
+BACKTEST_PRESETS = {
+    "1d": {"train_bars": 700,  "test_bars": 120},
+    "4h": {"train_bars": 1500, "test_bars": 300},
+    "1h": {"train_bars": 4000, "test_bars": 700},
+}
+
+
+def timeframe_preset(interval: str) -> dict:
+    """Возвращает пресет параметров под таймфрейм (или пустой dict)."""
+    return dict(TIMEFRAME_PRESETS.get(interval, {}))
+
+
+def make_config(symbol: str, interval: str, **overrides) -> Config:
+    """Строит Config из пресета таймфрейма, применяя явные переопределения сверху."""
+    params = timeframe_preset(interval)
+    params.update({"symbol": symbol, "interval": interval})
+    params.update({k: v for k, v in overrides.items() if v is not None})
+    return Config(**params)
+
+
+# =============================================================================
+# РЕЕСТР КЛАССОВ АКТИВОВ
+# =============================================================================
+
+# Словарь тикер → класс. Если тикер не найден — используется автодетект.
+ASSET_CLASS_REGISTRY: dict[str, str] = {
+    # Акции Мосбиржи
+    "SBER": "stocks", "GAZP": "stocks", "LKOH": "stocks", "GMKN": "stocks",
+    "ROSN": "stocks", "NVTK": "stocks", "TATN": "stocks", "MGNT": "stocks",
+    "MTSS": "stocks", "ALRS": "stocks", "CHMF": "stocks", "PLZL": "stocks",
+    "SNGS": "stocks", "VTBR": "stocks", "MOEX": "stocks", "PHOR": "stocks",
+    "RUAL": "stocks", "YDEX": "stocks", "IMOEX": "stocks", "RTSI": "stocks",
+    # Крипта (Bybit / любая биржа)
+    "BTCUSDT": "crypto", "ETHUSDT": "crypto", "SOLUSDT": "crypto",
+    "BNBUSDT": "crypto", "XRPUSDT": "crypto", "ADAUSDT": "crypto",
+    "DOGEUSDT": "crypto", "AVAXUSDT": "crypto", "DOTUSDT": "crypto",
+    "MATICUSDT": "crypto", "LINKUSDT": "crypto", "UNIUSDT": "crypto",
+    # Облигации (ISIN-коды или тикеры)
+    "SU26238RMFS4": "bonds", "SU26240RMFS0": "bonds", "SU26233RMFS5": "bonds",
+    "SU26236RMFS8": "bonds", "SU26241RMFS8": "bonds",
+    # Forex
+    "EURUSD": "forex", "USDRUB": "forex", "GBPUSD": "forex",
+    "USDJPY": "forex", "USDCNY": "forex", "EURRUB": "forex",
+    # Commodity — металлы
+    "XAUUSD": "commodity", "GOLD": "commodity", "XAGUSD": "commodity",
+    "SILVER": "commodity", "COPPER": "commodity", "PLATINUM": "commodity",
+    "HG": "commodity", "GC": "commodity", "SI": "commodity",
+    # Commodity — энергоносители
+    "CL": "commodity", "CRUDE": "commodity", "BRENT": "commodity",
+    "NG": "commodity", "WTI": "commodity", "UKOIL": "commodity",
+    "GAZR": "commodity",
+    # Commodity — с/х продукция
+    "ZC": "commodity", "ZW": "commodity", "ZS": "commodity",
+    "KC": "commodity", "SB": "commodity", "CC": "commodity",
+    "WHEAT": "commodity", "CORN": "commodity", "SOYA": "commodity",
+}
+
+# Описания классов для UI
+ASSET_CLASS_META = {
+    "stocks": {
+        "label": "Акции",
+        "description": "Акции Мосбиржи и мировых бирж",
+        "default_symbols": ["SBER", "GAZP", "LKOH", "GMKN", "ROSN",
+                            "NVTK", "TATN", "MGNT", "YDEX", "MOEX"],
+    },
+    "crypto": {
+        "label": "Крипта",
+        "description": "Криптовалютные пары (Bybit, Binance)",
+        "default_symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+                            "XRPUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT"],
+    },
+    "bonds": {
+        "label": "Облигации",
+        "description": "ОФЗ и корпоративные облигации",
+        "default_symbols": ["SU26238RMFS4", "SU26240RMFS0", "SU26233RMFS5",
+                            "SU26236RMFS8", "SU26241RMFS8"],
+    },
+    "forex": {
+        "label": "Forex",
+        "description": "Валютные пары",
+        "default_symbols": ["EURUSD", "GBPUSD", "USDJPY", "USDRUB", "EURRUB", "USDCNY"],
+    },
+    "commodity": {
+        "label": "Commodity",
+        "description": "Металлы, энергоносители, с/х продукция",
+        "default_symbols": ["XAUUSD", "XAGUSD", "CL", "NG", "BRENT", "ZC", "ZW", "ZS"],
+    },
+}
+
+
+def detect_asset_class(symbol: str) -> str:
+    """
+    Определяет класс актива по тикеру.
+    Сначала проверяет реестр, затем пробует автодетект по паттернам.
+    """
+    sym = symbol.upper().strip()
+
+    # явная регистрация
+    if sym in ASSET_CLASS_REGISTRY:
+        return ASSET_CLASS_REGISTRY[sym]
+
+    # автодетект по суффиксам крипты
+    if sym.endswith("USDT") or sym.endswith("BTC") or sym.endswith("ETH"):
+        return "crypto"
+
+    # автодетект облигаций по ISIN
+    if len(sym) == 12 and sym[:2].isalpha() and sym[2:].isdigit():
+        return "bonds"
+
+    # автодетект форекс по длине и известным валютам
+    if len(sym) == 6 and sym.isalpha():
+        return "forex"
+
+    # дефолт — акции
+    return "stocks"
+
+
+def register_asset(symbol: str, asset_class: str):
+    """Добавляет тикер в реестр классов активов."""
+    if asset_class not in ASSET_CLASS_META:
+        raise ValueError(f"Неизвестный класс '{asset_class}'. "
+                         f"Доступно: {', '.join(ASSET_CLASS_META)}")
+    ASSET_CLASS_REGISTRY[symbol.upper()] = asset_class
+
+
+def class_model_tag(asset_class: str, interval: str) -> str:
+    """Формирует тег модели для класса активов: CLASS_interval."""
+    return f"{asset_class.upper()}_{interval}"
+
+
+def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models") -> str:
+    """
+    Определяет какую модель использовать для данного тикера:
+    1. Индивидуальная модель (SBER_1d)     — наивысший приоритет
+    2. Модель класса активов (STOCKS_1d)   — если обучена
+    3. Универсальная модель (UNIVERSAL_1d) — fallback
+    Выбрасывает FileNotFoundError если ни одна не найдена.
+    """
+    candidates = [
+        f"{symbol.upper()}_{interval}",                        # индивидуальная
+        class_model_tag(detect_asset_class(symbol), interval), # класс активов
+        f"UNIVERSAL_{interval}",                               # универсальная
+    ]
+    for tag in candidates:
+        path = os.path.join(model_dir, f"{tag}_model.keras")
+        if os.path.exists(path):
+            return tag
+    raise FileNotFoundError(
+        f"Модель не найдена для '{symbol}' ({interval}). "
+        f"Проверено: {', '.join(candidates)}. "
+        "Обучите модель через вкладку «Обучение» или «Классы активов»."
+    )
+
+
+# =============================================================================
+# 2. ДАННЫЕ: загрузка + фичи + разметка целей
+# =============================================================================
+# Хук для подмены источника данных.
+# При старте автоматически активируется T-Invest если есть TINVEST_TOKEN в env.
+_DATA_SOURCE = None
+
+
+def set_data_source(fn):
+    """Регистрирует свой загрузчик данных: fn(cfg) -> DataFrame[open,high,low,close,volume]."""
+    global _DATA_SOURCE
+    _DATA_SOURCE = fn
+
+
+def _auto_init_datasource():
+    """Автоматически подключает T-Invest если токен есть в окружении."""
+    import os
+    token = os.environ.get("TINVEST_TOKEN", "").strip()
+    if token and _DATA_SOURCE is None:
+        try:
+            from tinvest_loader import make_loader
+            set_data_source(make_loader(token))
+            print("[data] T-Invest подключён автоматически (токен из TINVEST_TOKEN)")
+        except Exception as e:
+            print(f"[data] Не удалось подключить T-Invest автоматически: {e}")
+
+
+_auto_init_datasource()
+
+
+def load_ohlcv(cfg: Config) -> pd.DataFrame:
+    """Грузит OHLCV через зарегистрированный источник данных."""
+    if _DATA_SOURCE is not None:
+        df = _DATA_SOURCE(cfg)
+        print(f"[data] Загружено {len(df)} баров {cfg.symbol} {cfg.interval}")
+        return df
+    raise RuntimeError(
+        f"Источник данных не настроен. "
+        "Добавьте TINVEST_TOKEN в .env или выберите источник в интерфейсе."
+    )
+
+
+def _synthetic_ohlcv(n: int = 6000) -> pd.DataFrame:
+    """Геометрическое блуждание с режимами тренда/флэта — чтобы код был запускаем без сети."""
+    rng = np.random.default_rng(7)
+    ret = np.zeros(n)
+    regime = 0.0
+    for i in range(n):
+        if rng.random() < 0.01:
+            regime = rng.normal(0, 0.0004)          # смена режима тренда
+        ret[i] = regime + rng.normal(0, 0.006)      # дрейф + шум
+    close = 30000 * np.exp(np.cumsum(ret))
+    high = close * (1 + np.abs(rng.normal(0, 0.003, n)))
+    low = close * (1 - np.abs(rng.normal(0, 0.003, n)))
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    vol = rng.lognormal(10, 0.5, n)
+    idx = pd.date_range("2022-01-01", periods=n, freq="h")
+    return pd.DataFrame({"open": open_, "high": high, "low": low,
+                         "close": close, "volume": vol}, index=idx)
+
+
+def add_features(df: pd.DataFrame, interval: str = "1d") -> pd.DataFrame:
+    """Технические индикаторы + GARCH/HAR-RV фичи. Все используют ТОЛЬКО прошлые данные."""
+    out = df.copy()
+    c, h, l, v = out["close"], out["high"], out["low"], out["volume"]
+
+    # доходности
+    out["ret_1"] = c.pct_change()
+    out["ret_5"] = c.pct_change(5)
+    out["ret_10"] = c.pct_change(10)
+
+    # скользящие средние и отклонения от них
+    for w in (10, 20, 50):
+        out[f"sma_{w}"] = c.rolling(w).mean() / c - 1
+        out[f"std_{w}"] = c.pct_change().rolling(w).std()
+
+    # EMA
+    out["ema_12"] = c.ewm(span=12).mean() / c - 1
+    out["ema_26"] = c.ewm(span=26).mean() / c - 1
+
+    # MACD
+    macd = c.ewm(span=12).mean() - c.ewm(span=26).mean()
+    out["macd"] = macd / c
+    out["macd_sig"] = macd.ewm(span=9).mean() / c
+
+    # RSI(14)
+    delta = c.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / (loss + 1e-9)
+    out["rsi"] = 100 - 100 / (1 + rs)
+
+    # ATR(14) — нормированный к цене (нужен и как фича, и для разметки уровней)
+    tr = pd.concat([(h - l), (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean()
+    out["atr"] = atr                 # абсолютный ATR — пригодится для барьеров
+    out["atr_norm"] = atr / c        # нормированный — как фича
+
+    # Bollinger %B
+    mid = c.rolling(20).mean()
+    sd = c.rolling(20).std()
+    out["boll_b"] = (c - (mid - 2 * sd)) / (4 * sd + 1e-9)
+
+    # объёмные фичи
+    out["vol_chg"] = v.pct_change()
+    out["vol_z"] = (v - v.rolling(20).mean()) / (v.rolling(20).std() + 1e-9)
+
+    # GARCH/HAR-RV фичи волатильности (rolling, без утечки)
+    out = add_vol_features(out, interval=interval)
+
+    return out
+
+
+def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
+    """
+    Метод тройного барьера (López de Prado):
+    для каждой точки ставим верхний (TP) и нижний (SL) барьеры на расстоянии
+    кратном ATR и смотрим, какой сработает первым на горизонте `horizon`.
+
+    Возвращает:
+        p_up    — 1, если первым достигнут верхний барьер (или таймаут закрыт в плюс)
+        fwd_ret — фактическая доходность за горизонт
+        fwd_vol — реализованная волатильность за горизонт (для прогноза уровней)
+        valid   — маска валидных (с полной разметкой) точек
+    """
+    close = df["close"].to_numpy()
+    high = df["high"].to_numpy()
+    low = df["low"].to_numpy()
+    atr = df["atr"].to_numpy()
+    ret1 = df["close"].pct_change().to_numpy()
+    n = len(df)
+    H = cfg.horizon
+
+    p_up = np.zeros(n, dtype=np.float32)
+    fwd_ret = np.zeros(n, dtype=np.float32)
+    fwd_vol = np.zeros(n, dtype=np.float32)
+    valid = np.zeros(n, dtype=bool)
+
+    for i in range(n - H):
+        a = atr[i]
+        if not np.isfinite(a) or a <= 0:
+            continue
+        entry = close[i]
+        up = entry + cfg.tp_atr_mult * a
+        dn = entry - cfg.sl_atr_mult * a
+
+        outcome = None
+        for j in range(1, H + 1):
+            if high[i + j] >= up:
+                outcome = 1
+                break
+            if low[i + j] <= dn:
+                outcome = 0
+                break
+        if outcome is None:  # таймаут — размечаем по знаку итоговой доходности
+            outcome = 1 if close[i + H] > entry else 0
+
+        p_up[i] = outcome
+        fwd_ret[i] = (close[i + H] - entry) / entry
+        fwd_vol[i] = np.nanstd(ret1[i + 1: i + H + 1])
+        valid[i] = True
+
+    return p_up, fwd_ret, fwd_vol, valid
+
+
+# =============================================================================
+# 3. ПОДГОТОВКА ВЫБОРКИ: масштабирование + построение последовательностей
+# =============================================================================
+def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None = None,
+                  fit_scaler: bool = True):
+    """
+    Готовит X (окна), y (3 цели) и метаданные. Масштабирование делается
+    по train-части (без утечки), если scaler не передан.
+    """
+    feats = add_features(df, interval=cfg.interval)
+    p_up, fwd_ret, fwd_vol, valid = triple_barrier_targets(feats, cfg)
+
+    # выбираем фичи (исключаем сырые цены/объём и абсолютный ATR)
+    exclude = {"open", "high", "low", "close", "volume", "atr"}
+    feature_cols = [c for c in feats.columns if c not in exclude]
+    cfg.feature_cols = feature_cols
+
+    feats = feats.replace([np.inf, -np.inf], np.nan)
+    X_raw = feats[feature_cols].to_numpy(dtype=np.float32)
+
+    # строки валидны, если есть все фичи И есть полная разметка цели
+    finite = np.isfinite(X_raw).all(axis=1)
+    row_ok = finite & valid
+
+    # хронологический сплит train/val по доле
+    n = len(df)
+    split = int(n * (1 - cfg.val_fraction))
+
+    # scaler учим ТОЛЬКО на train-строках
+    if scaler is None:
+        scaler = StandardScaler()
+        train_mask = row_ok.copy()
+        train_mask[split:] = False
+        scaler.fit(X_raw[train_mask])
+    X_scaled = scaler.transform(np.nan_to_num(X_raw))
+
+    L = cfg.lookback
+    Xs, yp, yr, yv, end_idx = [], [], [], [], []
+    for t in range(L - 1, n):
+        if not row_ok[t]:
+            continue
+        window = X_scaled[t - L + 1: t + 1]
+        if not np.isfinite(window).all():
+            continue
+        Xs.append(window)
+        yp.append(p_up[t]); yr.append(fwd_ret[t]); yv.append(fwd_vol[t])
+        end_idx.append(t)
+
+    Xs = np.asarray(Xs, dtype=np.float32)
+    yp = np.asarray(yp, dtype=np.float32)
+    yr = np.asarray(yr, dtype=np.float32)
+    yv = np.asarray(yv, dtype=np.float32)
+    end_idx = np.asarray(end_idx)
+
+    is_train = end_idx < split
+    data = {
+        "X": Xs, "p_up": yp, "fwd_ret": yr, "fwd_vol": yv,
+        "is_train": is_train, "end_idx": end_idx,
+        "feature_cols": feature_cols,
+    }
+    return data, scaler
+
+
+# =============================================================================
+# 4. МОДЕЛЬ BiLSTM + CNN + Multi-Head Attention
+#
+# Архитектура:
+#   1. CNN-блок: три параллельных Conv1D (kernel 3/5/7) захватывают локальные
+#      паттерны разного масштаба, затем конкатенируются.
+#   2. BiLSTM: двунаправленный LSTM читает последовательность в обе стороны,
+#      даёт модели «контекст будущего» внутри окна.
+#   3. Multi-Head Attention: self-attention поверх BiLSTM-выходов — модель
+#      сама учится взвешивать важные временны́е шаги (пробои, дивергенции и т.п.)
+#   4. Три параллельные выходные головы — интерфейс идентичен старой GRU-модели.
+# =============================================================================
+
+class LastStep(layers.Layer):
+    """Извлекает последний временной шаг из тензора (T, D) -> (D,).
+    Кастомный слой вместо Lambda — безопасно сериализуется в Keras 3."""
+
+    def call(self, x):
+        return x[:, -1, :]
+
+    def get_config(self):
+        return super().get_config()
+
+
+class LastStep(layers.Layer):
+    """Извлекает последний временной шаг (T, D) -> (D,).
+    Кастомный слой вместо Lambda — безопасно сериализуется в Keras 3."""
+    def call(self, x):
+        return x[:, -1, :]
+    def get_config(self):
+        return super().get_config()
+
+
+def _cnn_block(inp, filters: int = 64):
+    """Три параллельных свёрточных пути с разными ядрами → конкатенация."""
+    branches = []
+    for k in (3, 5, 7):
+        x = layers.Conv1D(filters, kernel_size=k, padding="causal",
+                          activation="relu")(inp)
+        x = layers.BatchNormalization()(x)
+        branches.append(x)
+    return layers.Concatenate()(branches)          # (T, 3*filters)
+
+
+def _attention_block(x, num_heads: int = 4, key_dim: int = 32):
+    """Multi-Head Self-Attention + residual + layer norm."""
+    attn = layers.MultiHeadAttention(num_heads=num_heads, key_dim=key_dim,
+                                     dropout=0.1)(x, x)
+    x = layers.Add()([x, attn])
+    return layers.LayerNormalization()(x)
+
+
+def build_model(lookback: int, n_features: int, cfg: Config) -> Model:
+    inp = Input(shape=(lookback, n_features), name="seq")
+
+    # --- CNN: локальные паттерны на трёх масштабах ---
+    cnn = _cnn_block(inp, filters=32)              # (T, 96)
+    cnn = layers.Dropout(0.1)(cnn)
+
+    # --- BiLSTM: контекст по всей последовательности в обе стороны ---
+    x = layers.Bidirectional(
+        layers.LSTM(64, return_sequences=True)
+    )(cnn)                                         # (T, 128)
+    x = layers.Dropout(0.2)(x)
+
+    # --- Multi-Head Attention: акцент на ключевых барах ---
+    x = _attention_block(x, num_heads=4, key_dim=32)   # (T, 128)
+    x = layers.Dropout(0.15)(x)
+
+    # --- Агрегация: последний шаг + глобальный средний пул → конкатенация ---
+    last = LastStep()(x)                               # (128,)
+    avg  = layers.GlobalAveragePooling1D()(x)          # (128,)
+    x = layers.Concatenate()([last, avg])              # (256,)
+
+    # --- Общий ствол перед головами ---
+    x = layers.Dense(128, activation="gelu")(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.2)(x)
+    x = layers.Dense(64, activation="gelu")(x)
+    x = layers.BatchNormalization()(x)
+
+    # --- Три выходные головы (интерфейс не изменился) ---
+    out_p = layers.Dense(1, activation="sigmoid",  name="p_up")(x)     # вероятность
+    out_r = layers.Dense(1, activation="linear",   name="fwd_ret")(x)  # доходность
+    out_v = layers.Dense(1, activation="softplus", name="fwd_vol")(x)  # волатильность > 0
+
+    model = Model(inp, [out_p, out_r, out_v])
+    model.compile(
+        optimizer=Adam(cfg.learning_rate),
+        loss=["binary_crossentropy", "huber", "huber"],
+        loss_weights=[1.0, 1.0, 0.5],
+        metrics=[["accuracy", tf.keras.metrics.AUC(name="auc")], [], []],
+    )
+    return model
+
+
+# =============================================================================
+# 5. ОБУЧЕНИЕ / ДООБУЧЕНИЕ
+# =============================================================================
+def _paths(cfg: Config):
+    os.makedirs(cfg.model_dir, exist_ok=True)
+    base = os.path.join(cfg.model_dir, cfg.tag)
+    return {
+        "model": base + "_model.keras",
+        "scaler": base + "_scaler.pkl",
+        "config": base + "_config.json",
+    }
+
+
+def train(cfg: Config, warm_start: bool = False, extra_callbacks=None):
+    df = load_ohlcv(cfg)
+    data, scaler = build_dataset(df, cfg)
+
+    Xtr, Xva = data["X"][data["is_train"]], data["X"][~data["is_train"]]
+    ytr = [data["p_up"][data["is_train"]], data["fwd_ret"][data["is_train"]], data["fwd_vol"][data["is_train"]]]
+    yva = [data["p_up"][~data["is_train"]], data["fwd_ret"][~data["is_train"]], data["fwd_vol"][~data["is_train"]]]
+
+    print(f"[train] train={len(Xtr)}  val={len(Xva)}  features={Xtr.shape[-1]}  "
+          f"baseline p_up={data['p_up'][data['is_train']].mean():.3f}")
+
+    paths = _paths(cfg)
+    if warm_start and os.path.exists(paths["model"]):
+        print("[train] Тёплый старт: дозагружаю существующую модель")
+        model = tf.keras.models.load_model(paths["model"],
+                                        custom_objects={"LastStep": LastStep})
+    else:
+        model = build_model(cfg.lookback, Xtr.shape[-1], cfg)
+
+    # балансировка классов p_up через sample_weight (class_weight не работает
+    # для мультивыходных моделей). Веса применяем только к голове p_up.
+    pos = ytr[0].mean()
+    w_pos, w_neg = 0.5 / (pos + 1e-9), 0.5 / (1 - pos + 1e-9)
+    sw_p = np.where(ytr[0] == 1, w_pos, w_neg).astype(np.float32)
+    ones_tr = np.ones_like(sw_p)
+    sample_weight = [sw_p, ones_tr, ones_tr]
+
+    callbacks = [
+        EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True),
+        ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, min_lr=1e-5),
+        ModelCheckpoint(paths["model"], monitor="val_loss", save_best_only=True),
+    ]
+    if extra_callbacks:
+        callbacks.extend(extra_callbacks)
+
+    model.fit(
+        Xtr, [ytr[0], ytr[1], ytr[2]],
+        validation_data=(Xva, [yva[0], yva[1], yva[2]]),
+        epochs=cfg.epochs, batch_size=cfg.batch_size,
+        sample_weight=sample_weight,
+        callbacks=callbacks, verbose=2,
+    )
+
+    model.save(paths["model"])
+    joblib.dump(scaler, paths["scaler"])
+    with open(paths["config"], "w") as f:
+        json.dump(asdict(cfg), f, indent=2)
+    print(f"[train] Сохранено: {paths['model']}")
+    return model, scaler
+
+
+def train_universal(symbols: list[str], interval: str = "1d",
+                    epochs: int = 60, model_dir: str = "models",
+                    asset_class: str = "UNIVERSAL",
+                    extra_callbacks=None, log_fn=None):
+    """
+    Обучает модель класса активов на пуле инструментов.
+
+    asset_class — тег модели: "STOCKS", "CRYPTO", "BONDS", "FOREX", "UNIVERSAL".
+    Сохраняется как {asset_class}_{interval}_model.keras.
+
+    Данные каждого инструмента нормируются своим StandardScaler,
+    затем объединяются в единую выборку. Модель видит обезличенные
+    относительные фичи (доходности, индикаторы) — без абсолютных цен,
+    поэтому паттерны переносятся между инструментами.
+
+    Сохраняет артефакты как 'UNIVERSAL_{interval}_model.keras' и т.д.
+    На инференсе: загрузить universal-модель, передать scaler нужного
+    инструмента (или fit новый на его истории).
+    """
+    def _log(msg):
+        print(msg)
+        if log_fn:
+            log_fn(msg)
+
+    tag = asset_class.upper()
+    preset = timeframe_preset(interval)
+    cfg_proto = Config(symbol=tag, interval=interval,
+                       epochs=epochs, model_dir=model_dir,
+                       **{k: v for k, v in preset.items()
+                          if k in Config.__dataclass_fields__})
+
+    all_X_tr, all_X_va = [], []
+    all_yp_tr, all_yr_tr, all_yv_tr = [], [], []
+    all_yp_va, all_yr_va, all_yv_va = [], [], []
+    feature_cols = None
+    scalers = {}
+
+    for sym in symbols:
+        _log(f"[universal] Загрузка {sym} {interval}…")
+        cfg_i = make_config(sym, interval, epochs=epochs, model_dir=model_dir)
+        try:
+            df = load_ohlcv(cfg_i)
+            data, scaler_i = build_dataset(df, cfg_i)
+        except Exception as e:
+            _log(f"[universal] {sym} пропущен: {e}")
+            continue
+
+        if feature_cols is None:
+            feature_cols = data["feature_cols"]
+            cfg_proto.feature_cols = feature_cols
+        elif data["feature_cols"] != feature_cols:
+            _log(f"[universal] {sym} — несовпадение фич, пропускаем")
+            continue
+
+        scalers[sym] = scaler_i
+        tr, va = data["is_train"], ~data["is_train"]
+        all_X_tr.append(data["X"][tr]);  all_X_va.append(data["X"][va])
+        all_yp_tr.append(data["p_up"][tr]); all_yr_tr.append(data["fwd_ret"][tr])
+        all_yv_tr.append(data["fwd_vol"][tr])
+        all_yp_va.append(data["p_up"][va]); all_yr_va.append(data["fwd_ret"][va])
+        all_yv_va.append(data["fwd_vol"][va])
+        _log(f"[universal] {sym}: train={tr.sum()} val={va.sum()}")
+
+    if not all_X_tr:
+        raise RuntimeError("Не удалось загрузить ни одного инструмента.")
+
+    Xtr = np.concatenate(all_X_tr)
+    Xva = np.concatenate(all_X_va)
+    ytr = [np.concatenate(all_yp_tr), np.concatenate(all_yr_tr), np.concatenate(all_yv_tr)]
+    yva = [np.concatenate(all_yp_va), np.concatenate(all_yr_va), np.concatenate(all_yv_va)]
+
+    # перемешиваем train (val оставляем упорядоченным — не критично для оценки)
+    idx = np.random.permutation(len(Xtr))
+    Xtr, ytr = Xtr[idx], [y[idx] for y in ytr]
+
+    _log(f"[universal] Итого: train={len(Xtr)} val={len(Xva)} features={Xtr.shape[-1]}")
+
+    pos = ytr[0].mean()
+    w_pos, w_neg = 0.5 / (pos + 1e-9), 0.5 / (1 - pos + 1e-9)
+    sw_p = np.where(ytr[0] == 1, w_pos, w_neg).astype(np.float32)
+    ones_tr = np.ones_like(sw_p)
+
+    paths = _paths(cfg_proto)
+    model = build_model(cfg_proto.lookback, Xtr.shape[-1], cfg_proto)
+
+    callbacks = [
+        EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True),
+        ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, min_lr=1e-5),
+        ModelCheckpoint(paths["model"], monitor="val_loss", save_best_only=True),
+    ]
+    if extra_callbacks:
+        callbacks.extend(extra_callbacks)
+
+    model.fit(
+        Xtr, ytr,
+        validation_data=(Xva, yva),
+        epochs=cfg_proto.epochs, batch_size=cfg_proto.batch_size,
+        sample_weight=[sw_p, ones_tr, ones_tr],
+        callbacks=callbacks, verbose=2,
+    )
+
+    model.save(paths["model"])
+    # сохраняем scaler первого инструмента как «эталонный»
+    joblib.dump(next(iter(scalers.values())), paths["scaler"])
+    with open(paths["config"], "w") as f:
+        json.dump(asdict(cfg_proto), f, indent=2)
+
+    _log(f"[universal] Модель сохранена: {paths['model']}")
+    _log(f"[universal] Обучена на: {', '.join(scalers.keys())}")
+    return model, scalers
+
+
+def retrain(cfg: Config):
+    """Периодическое дообучение: свежие данные + тёплый старт от текущих весов."""
+    print(f"[retrain] {datetime.now():%Y-%m-%d %H:%M} — дообучение {cfg.tag}")
+    model, scaler = train(cfg, warm_start=True)
+    # версионируем снимок
+    paths = _paths(cfg)
+    snap = os.path.join(cfg.model_dir, f"{cfg.tag}_{datetime.now():%Y%m%d_%H%M}.keras")
+    model.save(snap)
+    print(f"[retrain] Снимок версии: {snap}")
+    return model, scaler
+
+
+# =============================================================================
+# 6. ИНФЕРЕНС: генерация торгового сигнала (entry / SL / TP)
+# =============================================================================
+def load_artifacts(cfg: Config):
+    tag = resolve_model_tag(cfg.symbol, cfg.interval, cfg.model_dir)
+    # если выбрана не индивидуальная модель — логируем
+    own_tag = cfg.tag
+    if tag != own_tag:
+        print(f"[infer] Индивидуальной модели для '{cfg.symbol}' нет. "
+              f"Используется: {tag}")
+
+    load_cfg = cfg if tag == own_tag else Config(
+        symbol=tag.rsplit("_", 1)[0], interval=cfg.interval, model_dir=cfg.model_dir
+    )
+    paths = _paths(load_cfg)
+
+    model = tf.keras.models.load_model(paths["model"],
+                                       custom_objects={"LastStep": LastStep})
+    scaler = joblib.load(paths["scaler"])
+    with open(paths["config"]) as f:
+        saved = json.load(f)
+    cfg.feature_cols = saved["feature_cols"]
+    for k in ("lookback", "horizon", "tp_atr_mult", "sl_atr_mult",
+              "prob_threshold", "min_rr"):
+        if k in saved:
+            setattr(cfg, k, saved[k])
+    return model, scaler
+
+
+def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
+    """Берёт последнее окно данных и выдаёт сигнал входа/стопа/тейка."""
+    model, scaler = load_artifacts(cfg)
+    if df is None:
+        df = load_ohlcv(cfg)
+
+    feats = add_features(df, interval=cfg.interval).replace([np.inf, -np.inf], np.nan)
+    X_raw = feats[cfg.feature_cols].to_numpy(dtype=np.float32)
+    X_clean = np.nan_to_num(X_raw)
+
+    # если scaler не обучен на реальных данных (универсальная модель) —
+    # фитируем точно так же как в build_dataset: только по train-части
+    from sklearn.preprocessing import StandardScaler as _SS
+    if not hasattr(scaler, "mean_") or scaler.mean_ is None or np.all(scaler.mean_ == 0):
+        split = int(len(X_clean) * (1 - cfg.val_fraction))
+        train_part = X_clean[:split]
+        finite_rows = np.isfinite(X_clean).all(axis=1)[:split]
+        scaler = _SS().fit(train_part[finite_rows] if finite_rows.any() else train_part)
+
+    X_scaled = scaler.transform(X_clean)
+
+    L = cfg.lookback
+    window = X_scaled[-L:][None, ...]
+    p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in model.predict(window, verbose=0)]
+
+    price = float(df["close"].iloc[-1])
+    atr = float(feats["atr"].iloc[-1])
+
+    # SL/TP строим через ATR — это стабильная мера волатильности в единицах цены.
+    # fwd_vol (σ лог-доходности) используем только для конуса прогноза.
+    # Дополнительно клэмпим ATR: не менее 0.1% и не более 5% от цены.
+    atr_clamped = float(np.clip(atr, 0.001 * price, 0.05 * price))
+
+    sl_dist = cfg.sl_atr_mult * atr_clamped
+    tp_dist = cfg.tp_atr_mult * atr_clamped
+
+    # выбор направления
+    direction = "FLAT"
+    if p_up >= cfg.prob_threshold and fwd_ret > 0:
+        direction = "LONG"
+    elif (1 - p_up) >= cfg.prob_threshold and fwd_ret < 0:
+        direction = "SHORT"
+    rr = tp_dist / (sl_dist + 1e-9)
+
+    if direction == "LONG":
+        entry, sl, tp = price, price - sl_dist, price + tp_dist
+    elif direction == "SHORT":
+        entry, sl, tp = price, price + sl_dist, price - tp_dist
+    else:
+        entry = sl = tp = price
+
+    # фильтр по минимальному R:R
+    if direction != "FLAT" and rr < cfg.min_rr:
+        direction = "FLAT"
+
+    signal = {
+        "time": str(df.index[-1]),
+        "symbol": cfg.symbol,
+        "direction": direction,
+        "entry": round(entry, 2),
+        "stop_loss": round(sl, 2),
+        "take_profit": round(tp, 2),
+        "prob_up": round(p_up, 3),
+        "exp_return": round(fwd_ret, 4),
+        "exp_vol": round(fwd_vol, 4),
+        "risk_reward": round(rr, 2),
+        "confidence": round(max(p_up, 1 - p_up), 3),
+    }
+    return signal
+
+
+def forecast(cfg: Config, steps: int = 10, history: int = 50,
+             band_k: float = 1.0, df: pd.DataFrame | None = None) -> dict:
+    """
+    Возвращает данные для графика прогноза:
+        history  — последние `history` баров (time, close)
+        forecast — прогнозный «отросток» на `steps` баров вперёд:
+                   mid (ожидаемая траектория) + конус неопределённости
+                   (upper/lower) расширяющийся как vol*sqrt(t)
+        signal/levels — вход, стоп-лосс, тейк-профит и направление
+
+    Прогноз честно отражает ограничения модели: mid — это интерполяция
+    ожидаемой доходности к горизонту, а конус — оценка волатильности.
+    Это ориентир, а не предсказание точной цены каждого бара.
+    """
+    model, scaler = load_artifacts(cfg)
+    if df is None:
+        df = load_ohlcv(cfg)
+
+    feats = add_features(df, interval=cfg.interval).replace([np.inf, -np.inf], np.nan)
+    X_raw = feats[cfg.feature_cols].to_numpy(dtype=np.float32)
+    X_clean = np.nan_to_num(X_raw)
+
+    from sklearn.preprocessing import StandardScaler as _SS
+    if not hasattr(scaler, "mean_") or scaler.mean_ is None or np.all(scaler.mean_ == 0):
+        split = int(len(X_clean) * (1 - cfg.val_fraction))
+        finite_rows = np.isfinite(X_clean).all(axis=1)[:split]
+        train_part = X_clean[:split]
+        scaler = _SS().fit(train_part[finite_rows] if finite_rows.any() else train_part)
+
+    X_scaled = scaler.transform(X_clean)
+    window = X_scaled[-cfg.lookback:][None, ...]
+    p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in model.predict(window, verbose=0)]
+
+    price0 = float(df["close"].iloc[-1])
+    per_bar_vol = max(fwd_vol, 1e-4)
+    H = max(cfg.horizon, 1)
+
+    # сигнал (та же логика, что в predict_signal) — через общий вызов
+    sig = predict_signal(cfg, df)
+
+    # прогнозная траектория
+    path = []
+    for t in range(1, steps + 1):
+        frac = min(t / H, 1.0)                      # доля пути к горизонту
+        mid = price0 * (1 + fwd_ret * frac)
+        band = band_k * per_bar_vol * (t ** 0.5)    # конус ~ vol*sqrt(t)
+        path.append({
+            "step": t,
+            "mid": round(mid, 2),
+            "upper": round(mid * (1 + band), 2),
+            "lower": round(max(mid * (1 - band), 0.0), 2),  # цена не бывает < 0
+        })
+
+    hist = df.iloc[-history:]
+    history_pts = [
+        {
+            "time":  str(ts),
+            "open":  round(float(row.open),  2),
+            "high":  round(float(row.high),  2),
+            "low":   round(float(row.low),   2),
+            "close": round(float(row.close), 2),
+        }
+        for ts, row in hist.iterrows()
+    ]
+
+    return {
+        "symbol": cfg.symbol,
+        "interval": cfg.interval,
+        "last_time": str(df.index[-1]),
+        "last_price": round(price0, 2),
+        "history": history_pts,
+        "forecast": path,
+        "signal": sig,
+        "levels": {
+            "direction": sig["direction"],
+            "entry": sig["entry"],
+            "stop_loss": sig["stop_loss"],
+            "take_profit": sig["take_profit"],
+        },
+    }
+
+
+# =============================================================================
+# 7. CLI
+# =============================================================================
+def parse_args():
+    p = argparse.ArgumentParser(description="Trading NN: entry / SL / TP")
+    p.add_argument("mode", choices=["train", "predict", "retrain"])
+    p.add_argument("--symbol", default="IMOEX")
+    p.add_argument("--interval", default="1d", help="1d / 4h / 1h")
+    # None -> взять из пресета таймфрейма
+    p.add_argument("--period", default=None)
+    p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--horizon", type=int, default=None)
+    p.add_argument("--lookback", type=int, default=None)
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    # пресет под таймфрейм + явные переопределения сверху
+    cfg = make_config(args.symbol, args.interval, period=args.period,
+                      epochs=args.epochs, horizon=args.horizon, lookback=args.lookback)
+    print(f"[cfg] {cfg.symbol} {cfg.interval}: horizon={cfg.horizon} "
+          f"lookback={cfg.lookback} period={cfg.period}")
+
+    if args.mode == "train":
+        train(cfg)
+    elif args.mode == "retrain":
+        retrain(cfg)
+    elif args.mode == "predict":
+        sig = predict_signal(cfg)
+        print("\n=== ТОРГОВЫЙ СИГНАЛ ===")
+        print(json.dumps(sig, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
