@@ -249,6 +249,7 @@ class TrainReq(BaseModel):
     horizon: Optional[int] = None
     lookback: Optional[int] = None
     warm_start: bool = False
+    entry_offset_mult: Optional[float] = None  # 0 = маркет, >0 = BUYSTOP/SELLSTOP
 
 
 class BacktestReq(BaseModel):
@@ -291,6 +292,7 @@ class TrainUniversalReq(BaseModel):
     asset_class: str = "stocks"
     interval: str = "1d"
     epochs: int = 40
+    entry_offset_mult: Optional[float] = None  # 0 = маркет, >0 = BUYSTOP/SELLSTOP
 
 
 class FeatureImportanceReq(BaseModel):
@@ -328,8 +330,10 @@ def _do_train(jid: str, req: TrainReq):
     JOBS.log(jid, f"Обучение {req.symbol} {req.interval}, эпох={req.epochs}")
     try:
         cfg = tn.make_config(req.symbol, req.interval, period=req.period,
-                             epochs=req.epochs, horizon=req.horizon, lookback=req.lookback)
-        JOBS.log(jid, f"горизонт={cfg.horizon} окно={cfg.lookback} история={cfg.period}")
+                             epochs=req.epochs, horizon=req.horizon, lookback=req.lookback,
+                             entry_offset_mult=req.entry_offset_mult)
+        mode = "BUYSTOP/SELLSTOP" if cfg.entry_offset_mult > 0 else "Маркет"
+        JOBS.log(jid, f"горизонт={cfg.horizon} окно={cfg.lookback} история={cfg.period} вход={mode}")
 
         tn.train(cfg, warm_start=req.warm_start,
                  extra_callbacks=[_make_stop_callback(jid, req.epochs)],
@@ -361,6 +365,8 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
         asset_class = req.asset_class.upper()
         symbols = req.symbols or tn.ASSET_CLASS_META.get(
             req.asset_class.lower(), {}).get("default_symbols", [])
+        mode = "BUYSTOP/SELLSTOP" if (req.entry_offset_mult or 0) > 0 else "Маркет"
+        JOBS.log(jid, f"вход={mode}")
         tn.train_universal(
             symbols=symbols,
             interval=req.interval,
@@ -369,6 +375,7 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             extra_callbacks=[_make_stop_callback(jid, req.epochs)],
             log_fn=lambda msg: JOBS.log(jid, msg),
             cancel_event=JOBS.cancel_event(jid),
+            entry_offset_mult=req.entry_offset_mult,
         )
 
         if JOBS.is_cancelled(jid):

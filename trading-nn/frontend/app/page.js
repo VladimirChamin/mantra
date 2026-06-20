@@ -44,17 +44,18 @@ export default function Dashboard() {
   const [assetClasses, setAssetClasses] = useState(null);
   const [activeClass, setActiveClass] = useState("stocks");
   const [classTrainParams, setClassTrainParams] = useState({
-    stocks:    { interval: "1d", epochs: 40, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
-    crypto:    { interval: "1d", epochs: 40, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
-    bonds:     { interval: "1d", epochs: 40, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
-    forex:     { interval: "1d", epochs: 40, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
-    commodity: { interval: "1d", epochs: 40, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
+    stocks:    { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    crypto:    { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
+    bonds:     { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
+    forex:     { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
+    commodity: { interval: "1d", epochs: 40, entry_offset_mult: 0, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
 
   // формы (дефолты — дневной таймфрейм, индекс Мосбиржи)
   const [train, setTrain] = useState({
     symbol: "IMOEX", interval: "1d", period: "6y",
     epochs: 40, horizon: 6, lookback: 50, warm_start: false,
+    entry_offset_mult: 0,
   });
   const [bt, setBt] = useState({
     symbol: "IMOEX", interval: "1d", period: "6y",
@@ -148,6 +149,7 @@ export default function Dashboard() {
       const r = await api.train({
         ...train,
         epochs: +train.epochs, horizon: +train.horizon, lookback: +train.lookback,
+        entry_offset_mult: +train.entry_offset_mult,
       });
       watch(r.job_id);
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -176,6 +178,7 @@ export default function Dashboard() {
         asset_class: activeClass,
         interval: p.interval || "1d",
         epochs: +(p.epochs || 40),
+        entry_offset_mult: +(p.entry_offset_mult ?? 0),
       });
       watch(r.job_id);
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -364,6 +367,25 @@ export default function Dashboard() {
                 onChange={(e) => setTrain({ ...train, warm_start: e.target.checked })} />
               <span>Тёплый старт (дообучить существующую модель)</span>
             </label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
+              {[["0", "Маркет"], ["0.3", "BUYSTOP/SELLSTOP"]].map(([val, label]) => (
+                <button key={val} type="button"
+                  onClick={() => setTrain({ ...train, entry_offset_mult: val })}
+                  style={{
+                    padding: "5px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                    fontFamily: "var(--body)", fontWeight: 500,
+                    border: `1px solid ${train.entry_offset_mult == val ? "var(--primary)" : "var(--line)"}`,
+                    background: train.entry_offset_mult == val ? "var(--primary)" : "transparent",
+                    color: train.entry_offset_mult == val ? "#fff" : "var(--muted)",
+                    transition: "all .15s",
+                  }}
+                >{label}</button>
+              ))}
+              {+train.entry_offset_mult === 0 && (
+                <span style={{ fontSize: 11, color: "var(--long)" }}>↑ рекомендуется для первого обучения</span>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button className="btn" onClick={startTrain} disabled={busy || !online}>
                 {busy && job?.kind === "train" ? "Идёт обучение…" : "Запустить обучение"}
@@ -511,6 +533,27 @@ export default function Dashboard() {
                       ...p, [activeClass]: { ...p[activeClass], epochs: e.target.value }
                     }))} />
                 </Field>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
+                {[["0", "Маркет"], ["0.3", "BUYSTOP/SELLSTOP"]].map(([val, label]) => {
+                  const cur = String(classTrainParams[activeClass]?.entry_offset_mult ?? 0);
+                  return (
+                    <button key={val} type="button"
+                      onClick={() => setClassTrainParams(p => ({
+                        ...p, [activeClass]: { ...p[activeClass], entry_offset_mult: val }
+                      }))}
+                      style={{
+                        padding: "5px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                        fontFamily: "var(--body)", fontWeight: 500,
+                        border: `1px solid ${cur == val ? "var(--primary)" : "var(--line)"}`,
+                        background: cur == val ? "var(--primary)" : "transparent",
+                        color: cur == val ? "#fff" : "var(--muted)",
+                        transition: "all .15s",
+                      }}
+                    >{label}</button>
+                  );
+                })}
               </div>
               <div style={{ display: "flex", gap: 10 }}>
                 <button className="btn" onClick={startClassTrain} disabled={busy || !online}>

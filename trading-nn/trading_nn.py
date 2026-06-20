@@ -71,7 +71,7 @@ class Config:
     tp_atr_mult: float = 2.5      # тейк = entry +/- tp_atr_mult * ATR
     sl_atr_mult: float = 1.5      # стоп = entry -/+ sl_atr_mult * ATR
     # --- отложенный ордер (BUYSTOP / SELLSTOP) ---
-    entry_offset_mult: float = 0.3  # BUYSTOP = close + offset*ATR, 0 = маркет
+    entry_offset_mult: float = 0.0  # BUYSTOP = close + offset*ATR, 0 = маркет
     fill_prob_threshold: float = 0.45  # мин. p_fill для выдачи сигнала
     # --- вход модели ---
     lookback: int = 50            # длина окна (timesteps) на вход сети
@@ -97,13 +97,13 @@ class Config:
 TIMEFRAME_PRESETS = {
     "1d": dict(horizon=6,  lookback=50, period="6y",
                tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.56,
-               entry_offset_mult=0.3, fill_prob_threshold=0.45),
+               entry_offset_mult=0.0, fill_prob_threshold=0.45),
     "4h": dict(horizon=12, lookback=64, period="3y",
                tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.57,
-               entry_offset_mult=0.3, fill_prob_threshold=0.45),
+               entry_offset_mult=0.0, fill_prob_threshold=0.45),
     "1h": dict(horizon=24, lookback=96, period="2y",
                tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.58,
-               entry_offset_mult=0.3, fill_prob_threshold=0.45),
+               entry_offset_mult=0.0, fill_prob_threshold=0.45),
 }
 
 # Ликвидные инструменты Мосбиржи (подсказки для интерфейса; можно ввести любой тикер).
@@ -1028,7 +1028,8 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
 def train_universal(symbols: list[str], interval: str = "1d",
                     epochs: int = 60, model_dir: str = "models",
                     asset_class: str = "UNIVERSAL",
-                    extra_callbacks=None, log_fn=None, cancel_event=None):
+                    extra_callbacks=None, log_fn=None, cancel_event=None,
+                    entry_offset_mult: float | None = None):
     """
     Обучает модель класса активов на пуле инструментов.
 
@@ -1055,6 +1056,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
                        epochs=epochs, model_dir=model_dir,
                        **{k: v for k, v in preset.items()
                           if k in Config.__dataclass_fields__})
+    if entry_offset_mult is not None:
+        cfg_proto.entry_offset_mult = entry_offset_mult
 
     all_X_tr, all_X_va = [], []
     all_yp_tr, all_yr_tr, all_yv_tr, all_yf_tr = [], [], [], []
@@ -1064,7 +1067,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
 
     for sym in symbols:
         _log(f"[universal] Загрузка {sym} {interval}…")
-        cfg_i = make_config(sym, interval, epochs=epochs, model_dir=model_dir)
+        cfg_i = make_config(sym, interval, epochs=epochs, model_dir=model_dir,
+                            entry_offset_mult=entry_offset_mult)
         try:
             df = load_ohlcv(cfg_i)
             # В universal-режиме НЕ используем index_df (RS у каждого инструмента
