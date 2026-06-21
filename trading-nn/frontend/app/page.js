@@ -15,6 +15,7 @@ import Subscriptions from "@/components/Subscriptions";
 import RetrainingPanel from "@/components/RetrainingPanel";
 import ModelMetrics from "@/components/ModelMetrics";
 import SymbolInput from "@/components/SymbolInput";
+import WalkForwardChart from "@/components/WalkForwardChart";
 
 const DEFAULT_INTERVALS = ["1d", "4h", "1h"];
 
@@ -646,7 +647,10 @@ export default function Dashboard() {
               <p className="sub">
                 Чистая доходность за вычетом комиссий и проскальзывания. Это оценка, а не гарантия.
               </p>
-              <MetricGrid overall={btResult.overall} />
+              <WalkForwardChart folds={btResult.folds} anchored={btResult.config?.anchored} />
+              <div style={{ marginTop: 18 }}>
+                <MetricGrid overall={btResult.overall} />
+              </div>
               <EquityChart curve={btResult.equity_curve} />
             </div>
           ) : null}

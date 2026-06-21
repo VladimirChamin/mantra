@@ -319,9 +319,29 @@ def _make_stop_callback(jid: str, total_epochs: int):
     class _StopCB(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch, logs=None):
             logs = logs or {}
-            JOBS.update(jid, progress=round((epoch + 1) / max(total_epochs, 1), 3))
-            JOBS.log(jid, f"эпоха {epoch + 1}/{total_epochs} "
-                          f"val_loss={logs.get('val_loss', float('nan')):.4f}")
+            ep = epoch + 1
+            JOBS.update(jid, progress=round(ep / max(total_epochs, 1), 3))
+            val_loss = logs.get("val_loss", float("nan"))
+            val_auc  = logs.get("val_p_up_auc", logs.get("val_auc", float("nan")))
+            lr       = float(self.model.optimizer.learning_rate
+                             if not callable(self.model.optimizer.learning_rate)
+                             else self.model.optimizer.learning_rate(self.model.optimizer.iterations))
+            JOBS.log(jid, f"эпоха {ep}/{total_epochs} "
+                          f"val_loss={val_loss:.4f} "
+                          f"val_auc={val_auc:.4f}")
+            # накапливаем числовые данные для графика
+            with JOBS.lock:
+                job = JOBS.jobs.get(jid)
+                if job is not None:
+                    if "epoch_data" not in job:
+                        job["epoch_data"] = []
+                    job["epoch_data"].append({
+                        "epoch": ep,
+                        "total": total_epochs,
+                        "val_loss": round(float(val_loss), 5) if val_loss == val_loss else None,
+                        "val_auc":  round(float(val_auc),  5) if val_auc  == val_auc  else None,
+                        "lr":       round(lr, 7),
+                    })
             if JOBS.is_cancelled(jid):
                 self.model.stop_training = True
     return _StopCB()

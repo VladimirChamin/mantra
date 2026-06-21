@@ -35,7 +35,7 @@ export default function Screener() {
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [done, setDone] = useState(false);
-  const [errors, setErrors] = useState([]);
+  const [errors, setErrors] = useState([]); // [{symbol, msg}]
 
   const [sortBy, setSortBy] = useState("prob_up");
   const [sortDir, setSortDir] = useState(-1);
@@ -71,8 +71,8 @@ export default function Screener() {
           });
           setResults([...newResults]);
         }
-      } catch {
-        newErrors.push(item.symbol);
+      } catch (e) {
+        newErrors.push({ symbol: item.symbol, msg: e?.message || "неизвестная ошибка" });
       }
       setProgress(Math.round(((i + 1) / items.length) * 100));
     }
@@ -158,9 +158,20 @@ export default function Screener() {
         )}
 
         {done && errors.length > 0 && (
-          <div className="error" style={{ marginTop: 10 }}>
-            Ошибки (нет модели): {errors.join(", ")}
-          </div>
+          <details style={{ marginTop: 10 }}>
+            <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--short)" }}>
+              Пропущено инструментов: {errors.length}
+            </summary>
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+              {errors.map(({ symbol, msg }) => (
+                <div key={symbol} style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)" }}>
+                  <span style={{ color: "var(--text)", fontWeight: 600 }}>{symbol}</span>
+                  {" — "}
+                  {msg}
+                </div>
+              ))}
+            </div>
+          </details>
         )}
       </div>
 

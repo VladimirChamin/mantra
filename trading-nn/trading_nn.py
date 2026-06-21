@@ -552,7 +552,7 @@ def _add_calendar_features(df: pd.DataFrame, interval: str = "1d") -> pd.DataFra
 
     # только для внутридневных таймфреймов добавляем час
     if interval in ("1h", "4h", "30m", "15m"):
-        hour = idx.hour
+        hour = pd.Series(idx.hour, index=df.index)
         out["cal_hour_sin"] = np.sin(2 * np.pi * hour / 24)
         out["cal_hour_cos"] = np.cos(2 * np.pi * hour / 24)
         # торговая сессия Мосбиржи 10:00-23:50 → нормированная позиция внутри дня
