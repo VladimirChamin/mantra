@@ -1,5 +1,5 @@
 "use client";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 const fmt = (n) =>
   typeof n === "number"
@@ -91,6 +91,7 @@ function saveAsJpeg(svgEl, filename) {
 export default function ForecastChart({ data, isAdmin }) {
   const svgRef  = useRef(null);
   const wrapRef = useRef(null);
+  const [showPivots, setShowPivots] = useState(true);
 
   if (!data || !data.history?.length || !data.forecast?.length) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
@@ -120,13 +121,13 @@ export default function ForecastChart({ data, isAdmin }) {
     { k: "S3", v: pl.s3, c: "#3b82f6", dash: "2 4" },
   ] : [];
 
-  // диапазон Y — включаем уровни пивота
+  // диапазон Y — включаем уровни пивота только когда они видимы
   const vals = [
     ...history.map((c) => c.high),
     ...history.map((c) => c.low),
     ...forecast.map((p) => forecastHasOHLC ? p.high : p.upper ?? p.mid),
     ...forecast.map((p) => forecastHasOHLC ? p.low  : p.lower ?? p.mid),
-    ...pivotLines.map((l) => l.v),
+    ...(showPivots ? pivotLines.map((l) => l.v) : []),
   ];
   if (hasTrade) vals.push(levels.entry, levels.stop_loss, levels.take_profit);
   let lo = Math.min(...vals);
@@ -185,24 +186,35 @@ export default function ForecastChart({ data, isAdmin }) {
 
   return (
     <div ref={wrapRef} className="chart-wrap">
-      <div style={{ marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <span style={{ fontSize: 12, color: "var(--muted-2)", fontFamily: "var(--mono)" }}>
           {data.symbol} · {data.interval} · {fmt(last_price)}
         </span>
-        {isAdmin && (
-          <button
-            onClick={() => svgRef.current && saveAsJpeg(svgRef.current, filename)}
-            title="Сохранить в JPEG"
-            style={{
-              background: "none", border: "1px solid var(--line)", borderRadius: 6,
-              color: "var(--muted-2)", cursor: "pointer", padding: "2px 9px",
-              fontSize: 11, fontFamily: "var(--mono)", lineHeight: 1.5,
-              transition: "border-color .15s, color .15s",
-            }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--primary)"; e.currentTarget.style.color = "var(--primary)"; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--line)";    e.currentTarget.style.color = "var(--muted-2)"; }}
-          >↓ jpg</button>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {pivot_levels && (
+            <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
+                            fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)",
+                            userSelect: "none" }}>
+              <input type="checkbox" checked={showPivots} onChange={e => setShowPivots(e.target.checked)}
+                     style={{ accentColor: "var(--primary)", cursor: "pointer" }} />
+              Pivot
+            </label>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => svgRef.current && saveAsJpeg(svgRef.current, filename)}
+              title="Сохранить в JPEG"
+              style={{
+                background: "none", border: "1px solid var(--line)", borderRadius: 6,
+                color: "var(--muted-2)", cursor: "pointer", padding: "2px 9px",
+                fontSize: 11, fontFamily: "var(--mono)", lineHeight: 1.5,
+                transition: "border-color .15s, color .15s",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--primary)"; e.currentTarget.style.color = "var(--primary)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--line)";    e.currentTarget.style.color = "var(--muted-2)"; }}
+            >↓ jpg</button>
+          )}
+        </div>
       </div>
 
       <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
@@ -230,7 +242,7 @@ export default function ForecastChart({ data, isAdmin }) {
                 fill={accentColor} opacity="0.04" />
 
           {/* уровни Pivot Point на всю ширину графика */}
-          {pivotLines.map((l) => (
+          {showPivots && pivotLines.map((l) => (
             <line key={l.k}
                   x1={padL} y1={y(l.v)} x2={padL + innerW} y2={y(l.v)}
                   stroke={l.c} strokeWidth={l.k === "PP" ? 1.2 : 0.8}
@@ -291,7 +303,7 @@ export default function ForecastChart({ data, isAdmin }) {
         ))}
 
         {/* подписи Pivot Points справа */}
-        {pivotLines.map((l) => (
+        {showPivots && pivotLines.map((l) => (
           <text key={l.k} x={padL + innerW + 4} y={y(l.v) + 3.5}
                 fill={l.c} fontSize="8" fontFamily="var(--mono)" opacity="0.8">
             {l.k} {fmt(l.v)}

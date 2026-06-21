@@ -60,6 +60,8 @@ export const api = {
     req(`/api/subscriptions/${id}`, { method: "DELETE" }),
   toggleSubscription: (id, active) =>
     req(`/api/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
+  updateSubscription: (id, payload) =>
+    req(`/api/subscriptions/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   // AUC Monitor
   getModelMetrics: () => req("/api/models/metrics"),
   deleteModel: (tag) => req(`/api/models/${tag}`, { method: "DELETE" }),

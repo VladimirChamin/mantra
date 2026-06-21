@@ -129,6 +129,22 @@ def delete_subscription(sub_id: int, user_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def update_subscription(sub_id: int, user_id: int, data: dict) -> Optional[dict]:
+    allowed = {"symbol", "interval", "channel", "destination", "direction_filter", "min_prob"}
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if not fields:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    values = list(fields.values()) + [sub_id, user_id]
+    with _con() as con:
+        con.execute(
+            f"UPDATE subscriptions SET {set_clause} WHERE id=? AND user_id=?", values
+        )
+        con.commit()
+        row = con.execute("SELECT * FROM subscriptions WHERE id=?", (sub_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def toggle_subscription(sub_id: int, user_id: int, active: bool) -> Optional[dict]:
     with _con() as con:
         con.execute(

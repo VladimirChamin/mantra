@@ -948,6 +948,14 @@ def patch_subscription(sub_id: int, req: ToggleSubReq, current_user: dict = Depe
     return sub
 
 
+@app.put("/api/subscriptions/{sub_id}", tags=["subscriptions"])
+def update_subscription(sub_id: int, req: SubscriptionReq, current_user: dict = Depends(auth.get_current_user)):
+    sub = subs_mod.update_subscription(sub_id, current_user["id"], req.model_dump())
+    if not sub:
+        raise HTTPException(404, "Подписка не найдена")
+    return sub
+
+
 # =============================================================================
 # Расписание переобучения (admin)
 # =============================================================================
