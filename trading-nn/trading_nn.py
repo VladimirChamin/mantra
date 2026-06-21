@@ -1417,16 +1417,23 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     sig = predict_signal(cfg, df)
 
     # Прогнозные свечи через Pivot Points.
-    # Свечи чередуются вверх/вниз (зигзаг), но их close дрейфует к целевой
-    # траектории mid. Это даёт реалистичный вид серии разнонаправленных баров
-    # вместо монотонного роста/падения одного цвета.
     #
-    # Для каждого бара:
-    #   PP = (prev_H + prev_L + prev_C) / 3  — пивот
-    #   R1 = 2*PP - prev_L,  S1 = 2*PP - prev_H
-    #   Нечётный бар (зигзаг вверх): open=S1, close=R1, high=R1+(PP-S1)*0.3, low=S1-(PP-S1)*0.3
-    #   Чётный  бар (зигзаг вниз):   open=R1, close=S1, high=R1+(PP-S1)*0.3, low=S1-(PP-S1)*0.3
-    #   Затем close подтягивается к mid (среднее тела → mid)
+    # Направление каждого бара задаётся детерминированным паттерном,
+    # имитирующим реальный рынок: в тренде преобладает направление прогноза,
+    # но периодически встречаются 1-2 противоходных бара (коррекция/консолидация).
+    #
+    # Паттерн: в бычьем тренде — [↑,↑,↓,↑,↑,↑,↓,↑,↓,↑,↑,↓,↑,↑,↓,...]
+    #          в медвежьем    — [↓,↓,↑,↓,↓,↓,↑,↓,↑,↓,↓,↑,↓,↓,↑,...]
+    # «Против тренда» бары смещают close к PP (а не к R1/S1), давая коррекцию.
+    #
+    # Размер тела: пропорционален расстоянию prev_c → mid (нарастает к горизонту).
+    # Фитили строятся по R1/S1 пивота — реалистичная ширина бара.
+    _bull_trend = fwd_ret >= 0
+    # паттерн: True = по тренду, False = против тренда
+    # читается циклически; против-трендовые бары на позициях 3,7,9,12,15,...
+    _pattern = [True, True, False, True, True, True, False, True,
+                False, True, True, False, True, True, False]
+
     prev_h = float(df["high"].iloc[-1])
     prev_l = float(df["low"].iloc[-1])
     prev_c = price0
@@ -1436,25 +1443,34 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         mid  = price0 * (1 + fwd_ret * frac)
         band = band_k * per_bar_vol * (t ** 0.5)
 
-        pp = (prev_h + prev_l + prev_c) / 3
-        r1 = 2 * pp - prev_l   # сопротивление
-        s1 = 2 * pp - prev_h   # поддержка
-        rng = max(r1 - s1, prev_c * 0.001)  # размах R1-S1
+        pp  = (prev_h + prev_l + prev_c) / 3
+        r1  = 2 * pp - prev_l          # сопротивление 1
+        s1  = 2 * pp - prev_h          # поддержка 1
+        rng = max(r1 - s1, prev_c * 0.001)
 
-        # чётные/нечётные бары чередуются направлением
-        if t % 2 == 1:          # бычья свеча зигзага
-            bar_open  = s1
-            bar_close = r1
-        else:                   # медвежья свеча зигзага
-            bar_open  = r1
-            bar_close = s1
+        with_trend = _pattern[(t - 1) % len(_pattern)]
+        is_bull    = with_trend == _bull_trend   # направление этого бара
 
-        # сдвигаем тело к целевому mid: close = среднее(orig_close, mid)
-        bar_close = (bar_close + mid) / 2
-        bar_open  = (bar_open  + prev_c) / 2
+        if is_bull:
+            # бычий бар: open ближе к S1/PP, close ближе к R1
+            bar_open  = pp - rng * 0.15
+            bar_close = pp + rng * 0.35
+        else:
+            # медвежий бар: open ближе к R1, close ближе к S1/PP
+            bar_open  = pp + rng * 0.15
+            bar_close = pp - rng * 0.35
 
-        bar_high = max(bar_open, bar_close) + rng * 0.25
-        bar_low  = min(bar_open, bar_close) - rng * 0.25
+        # подтягиваем close к целевой траектории mid
+        # (против-трендовый бар тянется меньше, чтобы коррекция была неглубокой)
+        pull = 0.6 if with_trend else 0.25
+        bar_close = bar_close * (1 - pull) + mid * pull
+        bar_open  = prev_c * 0.5 + pp * 0.5   # open от предыдущего close через PP
+
+        # фитили через R1/S1: сверху до R1, снизу до S1
+        wick_top = rng * 0.20
+        wick_bot = rng * 0.20
+        bar_high = max(bar_open, bar_close) + wick_top
+        bar_low  = min(bar_open, bar_close) - wick_bot
         # корректность OHLC
         bar_high = max(bar_high, bar_open, bar_close)
         bar_low  = min(bar_low,  bar_open, bar_close)
