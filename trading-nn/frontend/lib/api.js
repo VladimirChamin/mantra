@@ -50,6 +50,8 @@ export const api = {
   aiQuota: () => req("/api/ai_quota"),
   analysis: (payload) =>
     req("/api/analysis", { method: "POST", body: JSON.stringify(payload) }),
+  listAnalyses: () => req("/api/analyses"),
+  getAnalysis: (id) => req(`/api/analyses/${id}`),
   changePassword: (payload) =>
     req("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
   // Подписки на сигналы

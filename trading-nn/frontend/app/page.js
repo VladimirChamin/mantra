@@ -8,7 +8,7 @@ import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
 import EquityChart from "@/components/EquityChart";
 import JobLog from "@/components/JobLog";
-import AIAnalysis from "@/components/AIAnalysis";
+import AIAnalysis, { AnalysisHistory } from "@/components/AIAnalysis";
 import AdminPanel from "@/components/AdminPanel";
 import Screener from "@/components/Screener";
 import Subscriptions from "@/components/Subscriptions";
@@ -773,6 +773,12 @@ export default function Dashboard() {
               quota={aiQuota}
               onQuotaUpdate={setAiQuota}
             />
+          </div>
+
+          <div className="card" style={{ marginTop: 18 }}>
+            <h2>История AI-анализов</h2>
+            <p className="sub">Последние 20 анализов. Нажмите на строку чтобы раскрыть полный результат.</p>
+            <AnalysisHistory />
           </div>
 
           {signals.length > 0 && (
