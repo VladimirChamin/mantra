@@ -1416,16 +1416,17 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     # сигнал (та же логика, что в predict_signal) — через общий вызов
     sig = predict_signal(cfg, df)
 
-    # прогнозная траектория — свечи через Pivot Points
-    # Каждый бар строится так:
-    #   mid  — целевая цена (ожидаемая траектория)
-    #   close = mid
-    #   PP   = (prev_high + prev_low + prev_close) / 3
-    #   R1   = 2*PP - prev_low  (сопротивление 1)
-    #   S1   = 2*PP - prev_high (поддержка 1)
-    #   high = R1 если бычий бар, иначе PP + (R1-PP)*0.5
-    #   low  = S1 если медвежий бар, иначе PP - (PP-S1)*0.5
-    #   open = PP (открытие от пивота)
+    # Прогнозные свечи через Pivot Points.
+    # Свечи чередуются вверх/вниз (зигзаг), но их close дрейфует к целевой
+    # траектории mid. Это даёт реалистичный вид серии разнонаправленных баров
+    # вместо монотонного роста/падения одного цвета.
+    #
+    # Для каждого бара:
+    #   PP = (prev_H + prev_L + prev_C) / 3  — пивот
+    #   R1 = 2*PP - prev_L,  S1 = 2*PP - prev_H
+    #   Нечётный бар (зигзаг вверх): open=S1, close=R1, high=R1+(PP-S1)*0.3, low=S1-(PP-S1)*0.3
+    #   Чётный  бар (зигзаг вниз):   open=R1, close=S1, high=R1+(PP-S1)*0.3, low=S1-(PP-S1)*0.3
+    #   Затем close подтягивается к mid (среднее тела → mid)
     prev_h = float(df["high"].iloc[-1])
     prev_l = float(df["low"].iloc[-1])
     prev_c = price0
@@ -1436,27 +1437,37 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         band = band_k * per_bar_vol * (t ** 0.5)
 
         pp = (prev_h + prev_l + prev_c) / 3
-        r1 = 2 * pp - prev_l
-        s1 = 2 * pp - prev_h
+        r1 = 2 * pp - prev_l   # сопротивление
+        s1 = 2 * pp - prev_h   # поддержка
+        rng = max(r1 - s1, prev_c * 0.001)  # размах R1-S1
 
-        is_bull = mid >= prev_c
-        bar_open  = round(pp, 2)
-        bar_close = round(mid, 2)
-        bar_high  = round(r1 if is_bull else pp + (r1 - pp) * 0.5, 2)
-        bar_low   = round(s1 if not is_bull else pp - (pp - s1) * 0.5, 2)
-        # гарантируем корректность OHLC
-        bar_high  = max(bar_high, bar_open, bar_close)
-        bar_low   = min(bar_low,  bar_open, bar_close)
+        # чётные/нечётные бары чередуются направлением
+        if t % 2 == 1:          # бычья свеча зигзага
+            bar_open  = s1
+            bar_close = r1
+        else:                   # медвежья свеча зигзага
+            bar_open  = r1
+            bar_close = s1
+
+        # сдвигаем тело к целевому mid: close = среднее(orig_close, mid)
+        bar_close = (bar_close + mid) / 2
+        bar_open  = (bar_open  + prev_c) / 2
+
+        bar_high = max(bar_open, bar_close) + rng * 0.25
+        bar_low  = min(bar_open, bar_close) - rng * 0.25
+        # корректность OHLC
+        bar_high = max(bar_high, bar_open, bar_close)
+        bar_low  = min(bar_low,  bar_open, bar_close)
 
         path.append({
             "step":  t,
-            "mid":   bar_close,
+            "mid":   round(mid, 2),
             "upper": round(mid * (1 + band), 2),
             "lower": round(max(mid * (1 - band), 0.0), 2),
-            "open":  bar_open,
-            "high":  bar_high,
-            "low":   bar_low,
-            "close": bar_close,
+            "open":  round(bar_open,  2),
+            "high":  round(bar_high,  2),
+            "low":   round(bar_low,   2),
+            "close": round(bar_close, 2),
         })
         prev_h, prev_l, prev_c = bar_high, bar_low, bar_close
 
