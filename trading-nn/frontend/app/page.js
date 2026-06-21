@@ -607,10 +607,6 @@ export default function Dashboard() {
           <div className="grid">
             <div className="card">
               <h2>{assetClasses?.[activeClass]?.label || activeClass} — обучение модели</h2>
-              <p className="sub">
-                Одна модель на весь класс. При запросе прогноза сервис автоматически
-                выберет нужную сеть по тикеру.
-              </p>
               <Field label="Инструменты">
                 <SymbolTags
                   value={classTrainParams[activeClass]?.symbols || ""}
