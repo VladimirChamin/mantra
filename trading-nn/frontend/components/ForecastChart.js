@@ -96,7 +96,7 @@ export default function ForecastChart({ data, isAdmin }) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
   }
 
-  const { history, forecast, levels, last_price } = data;
+  const { history, forecast, levels, last_price, pivot_levels } = data;
   const hN = history.length;
   const fN = forecast.length;
   const nowIdx = hN - 1;
@@ -108,12 +108,25 @@ export default function ForecastChart({ data, isAdmin }) {
 
   const forecastHasOHLC = forecast[0]?.open !== undefined;
 
-  // диапазон Y
+  // уровни пивота для отрисовки
+  const pl = pivot_levels;
+  const pivotLines = pl ? [
+    { k: "R3", v: pl.r3, c: "#ef4444", dash: "2 4" },
+    { k: "R2", v: pl.r2, c: "#f97316", dash: "2 4" },
+    { k: "R1", v: pl.r1, c: "#eab308", dash: "2 4" },
+    { k: "PP", v: pl.pp, c: "#6366f1", dash: "4 3" },
+    { k: "S1", v: pl.s1, c: "#22c55e", dash: "2 4" },
+    { k: "S2", v: pl.s2, c: "#14b8a6", dash: "2 4" },
+    { k: "S3", v: pl.s3, c: "#3b82f6", dash: "2 4" },
+  ] : [];
+
+  // диапазон Y — включаем уровни пивота
   const vals = [
     ...history.map((c) => c.high),
     ...history.map((c) => c.low),
     ...forecast.map((p) => forecastHasOHLC ? p.high : p.upper ?? p.mid),
     ...forecast.map((p) => forecastHasOHLC ? p.low  : p.lower ?? p.mid),
+    ...pivotLines.map((l) => l.v),
   ];
   if (hasTrade) vals.push(levels.entry, levels.stop_loss, levels.take_profit);
   let lo = Math.min(...vals);
@@ -216,6 +229,14 @@ export default function ForecastChart({ data, isAdmin }) {
                 width={padL + innerW - xBar(nowIdx + 0.5)} height={innerH}
                 fill={accentColor} opacity="0.04" />
 
+          {/* уровни Pivot Point на всю ширину графика */}
+          {pivotLines.map((l) => (
+            <line key={l.k}
+                  x1={padL} y1={y(l.v)} x2={padL + innerW} y2={y(l.v)}
+                  stroke={l.c} strokeWidth={l.k === "PP" ? 1.2 : 0.8}
+                  strokeDasharray={l.dash} opacity="0.55" />
+          ))}
+
           {/* исторические свечи */}
           {candles.map((c, i) => (
             <g key={i}>
@@ -263,10 +284,18 @@ export default function ForecastChart({ data, isAdmin }) {
         <line x1={nowX} y1={padT} x2={nowX} y2={padT + innerH}
               stroke="var(--line)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
 
-        {/* подписи уровней справа */}
+        {/* подписи уровней сделки справа */}
         {levelLines.map((l, i) => (
           <text key={i} x={padL + innerW + 4} y={y(l.v) + 3.5} fill={l.c}
                 fontSize="9" fontFamily="var(--mono)">{l.k} {fmt(l.v)}</text>
+        ))}
+
+        {/* подписи Pivot Points справа */}
+        {pivotLines.map((l) => (
+          <text key={l.k} x={padL + innerW + 4} y={y(l.v) + 3.5}
+                fill={l.c} fontSize="8" fontFamily="var(--mono)" opacity="0.8">
+            {l.k} {fmt(l.v)}
+          </text>
         ))}
       </svg>
     </div>

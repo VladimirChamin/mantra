@@ -1416,26 +1416,38 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     # сигнал (та же логика, что в predict_signal) — через общий вызов
     sig = predict_signal(cfg, df)
 
-    # Прогнозные свечи через Pivot Points.
-    #
-    # Направление каждого бара задаётся детерминированным паттерном,
-    # имитирующим реальный рынок: в тренде преобладает направление прогноза,
-    # но периодически встречаются 1-2 противоходных бара (коррекция/консолидация).
-    #
-    # Паттерн: в бычьем тренде — [↑,↑,↓,↑,↑,↑,↓,↑,↓,↑,↑,↓,↑,↑,↓,...]
-    #          в медвежьем    — [↓,↓,↑,↓,↓,↓,↑,↓,↑,↓,↓,↑,↓,↓,↑,...]
-    # «Против тренда» бары смещают close к PP (а не к R1/S1), давая коррекцию.
-    #
-    # Размер тела: пропорционален расстоянию prev_c → mid (нарастает к горизонту).
-    # Фитили строятся по R1/S1 пивота — реалистичная ширина бара.
+    # ── Pivot Points от последней исторической свечи ──────────────────────────
+    # Классические формулы: PP=(H+L+C)/3,
+    #   R1=2PP-L,  R2=PP+(H-L),  R3=H+2(PP-L)
+    #   S1=2PP-H,  S2=PP-(H-L),  S3=L-2(H-PP)
+    _ph = float(df["high"].iloc[-1])
+    _pl = float(df["low"].iloc[-1])
+    _pc = price0
+    _pp  = (_ph + _pl + _pc) / 3
+    _r1  = 2 * _pp - _pl
+    _r2  = _pp + (_ph - _pl)
+    _r3  = _ph + 2 * (_pp - _pl)
+    _s1  = 2 * _pp - _ph
+    _s2  = _pp - (_ph - _pl)
+    _s3  = _pl - 2 * (_ph - _pp)
+    pivot_levels = {
+        "pp": round(_pp, 2),
+        "r1": round(_r1, 2), "r2": round(_r2, 2), "r3": round(_r3, 2),
+        "s1": round(_s1, 2), "s2": round(_s2, 2), "s3": round(_s3, 2),
+    }
+
+    # ── Прогнозные свечи ──────────────────────────────────────────────────────
+    # Паттерн направлений: по тренду с периодическими коррекциями.
+    # Свечи «притягиваются» к ближайшему уровню пивота (PP/R1..R3/S1..S3),
+    # имитируя реальное поведение цены у значимых уровней.
     _bull_trend = fwd_ret >= 0
-    # паттерн: True = по тренду, False = против тренда
-    # читается циклически; против-трендовые бары на позициях 3,7,9,12,15,...
     _pattern = [True, True, False, True, True, True, False, True,
                 False, True, True, False, True, True, False]
+    # все уровни пивота в виде sorted-списка для поиска ближайшего
+    _pivot_vals = sorted([_s3, _s2, _s1, _pp, _r1, _r2, _r3])
 
-    prev_h = float(df["high"].iloc[-1])
-    prev_l = float(df["low"].iloc[-1])
+    prev_h = _ph
+    prev_l = _pl
     prev_c = price0
     path = []
     for t in range(1, steps + 1):
@@ -1443,35 +1455,33 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         mid  = price0 * (1 + fwd_ret * frac)
         band = band_k * per_bar_vol * (t ** 0.5)
 
+        # пивот от текущего prev_h/prev_l/prev_c
         pp  = (prev_h + prev_l + prev_c) / 3
-        r1  = 2 * pp - prev_l          # сопротивление 1
-        s1  = 2 * pp - prev_h          # поддержка 1
+        r1  = 2 * pp - prev_l
+        s1  = 2 * pp - prev_h
         rng = max(r1 - s1, prev_c * 0.001)
 
         with_trend = _pattern[(t - 1) % len(_pattern)]
-        is_bull    = with_trend == _bull_trend   # направление этого бара
+        is_bull    = with_trend == _bull_trend
+
+        # ближайший уровень глобального пивота к mid — свеча «магнетится» к нему
+        nearest_pivot = min(_pivot_vals, key=lambda v: abs(v - mid))
 
         if is_bull:
-            # бычий бар: open ближе к S1/PP, close ближе к R1
             bar_open  = pp - rng * 0.15
             bar_close = pp + rng * 0.35
         else:
-            # медвежий бар: open ближе к R1, close ближе к S1/PP
             bar_open  = pp + rng * 0.15
             bar_close = pp - rng * 0.35
 
-        # подтягиваем close к целевой траектории mid
-        # (против-трендовый бар тянется меньше, чтобы коррекция была неглубокой)
+        # pull к mid, с лёгким притяжением к ближайшему уровню пивота
         pull = 0.6 if with_trend else 0.25
-        bar_close = bar_close * (1 - pull) + mid * pull
-        bar_open  = prev_c * 0.5 + pp * 0.5   # open от предыдущего close через PP
+        target = mid * 0.75 + nearest_pivot * 0.25   # mid доминирует, пивот корректирует
+        bar_close = bar_close * (1 - pull) + target * pull
+        bar_open  = prev_c * 0.5 + pp * 0.5
 
-        # фитили через R1/S1: сверху до R1, снизу до S1
-        wick_top = rng * 0.20
-        wick_bot = rng * 0.20
-        bar_high = max(bar_open, bar_close) + wick_top
-        bar_low  = min(bar_open, bar_close) - wick_bot
-        # корректность OHLC
+        bar_high = max(bar_open, bar_close) + rng * 0.20
+        bar_low  = min(bar_open, bar_close) - rng * 0.20
         bar_high = max(bar_high, bar_open, bar_close)
         bar_low  = min(bar_low,  bar_open, bar_close)
 
@@ -1506,6 +1516,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         "last_price": round(price0, 2),
         "history": history_pts,
         "forecast": path,
+        "pivot_levels": pivot_levels,
         "signal": sig,
         "levels": {
             "direction": sig["direction"],
