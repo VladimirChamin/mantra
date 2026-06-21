@@ -1416,18 +1416,49 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     # сигнал (та же логика, что в predict_signal) — через общий вызов
     sig = predict_signal(cfg, df)
 
-    # прогнозная траектория
+    # прогнозная траектория — свечи через Pivot Points
+    # Каждый бар строится так:
+    #   mid  — целевая цена (ожидаемая траектория)
+    #   close = mid
+    #   PP   = (prev_high + prev_low + prev_close) / 3
+    #   R1   = 2*PP - prev_low  (сопротивление 1)
+    #   S1   = 2*PP - prev_high (поддержка 1)
+    #   high = R1 если бычий бар, иначе PP + (R1-PP)*0.5
+    #   low  = S1 если медвежий бар, иначе PP - (PP-S1)*0.5
+    #   open = PP (открытие от пивота)
+    prev_h = float(df["high"].iloc[-1])
+    prev_l = float(df["low"].iloc[-1])
+    prev_c = price0
     path = []
     for t in range(1, steps + 1):
-        frac = min(t / H, 1.0)                      # доля пути к горизонту
-        mid = price0 * (1 + fwd_ret * frac)
-        band = band_k * per_bar_vol * (t ** 0.5)    # конус ~ vol*sqrt(t)
+        frac = min(t / H, 1.0)
+        mid  = price0 * (1 + fwd_ret * frac)
+        band = band_k * per_bar_vol * (t ** 0.5)
+
+        pp = (prev_h + prev_l + prev_c) / 3
+        r1 = 2 * pp - prev_l
+        s1 = 2 * pp - prev_h
+
+        is_bull = mid >= prev_c
+        bar_open  = round(pp, 2)
+        bar_close = round(mid, 2)
+        bar_high  = round(r1 if is_bull else pp + (r1 - pp) * 0.5, 2)
+        bar_low   = round(s1 if not is_bull else pp - (pp - s1) * 0.5, 2)
+        # гарантируем корректность OHLC
+        bar_high  = max(bar_high, bar_open, bar_close)
+        bar_low   = min(bar_low,  bar_open, bar_close)
+
         path.append({
-            "step": t,
-            "mid": round(mid, 2),
+            "step":  t,
+            "mid":   bar_close,
             "upper": round(mid * (1 + band), 2),
-            "lower": round(max(mid * (1 - band), 0.0), 2),  # цена не бывает < 0
+            "lower": round(max(mid * (1 - band), 0.0), 2),
+            "open":  bar_open,
+            "high":  bar_high,
+            "low":   bar_low,
+            "close": bar_close,
         })
+        prev_h, prev_l, prev_c = bar_high, bar_low, bar_close
 
     hist = df.iloc[-history:]
     history_pts = [
