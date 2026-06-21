@@ -1666,10 +1666,14 @@ def get_all_metrics(model_dir: str = "models") -> list[dict]:
     if not os.path.isdir(model_dir):
         return []
 
+    import re as _re
+    _ver_pat = _re.compile(r"_v\d+_model\.keras$")
     results = []
     for fname in sorted(os.listdir(model_dir)):
         if not fname.endswith("_model.keras"):
             continue
+        if _ver_pat.search(fname):
+            continue  # пропускаем версионные копии (CRYPTO_1d_v1_model.keras)
         tag = fname[:-len("_model.keras")]
         metrics = get_model_metrics(tag, model_dir)
         if metrics:
