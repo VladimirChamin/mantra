@@ -12,6 +12,7 @@ SQLite (aiosqlite) + bcrypt + JWT.
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import asyncio
 import secrets
@@ -64,6 +65,19 @@ def init_db() -> None:
             user_id      INTEGER NOT NULL REFERENCES users(id),
             symbol       TEXT,
             created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_analyses (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id          INTEGER NOT NULL REFERENCES users(id),
+            symbol           TEXT    NOT NULL,
+            signal_direction TEXT,
+            signal_entry     REAL,
+            verdict          TEXT,
+            verdict_conf     INTEGER,
+            recommendation   TEXT,
+            result_json      TEXT,
+            created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS signals (
@@ -438,6 +452,52 @@ def consume_ai_quota(user_id: int, symbol: str = None):
             (user_id, symbol)
         )
         con.commit()
+
+
+def save_ai_analysis(user_id: int, result: dict) -> int:
+    verdict_block = result.get("verdict", {})
+    with _con() as con:
+        cur = con.execute(
+            """INSERT INTO ai_analyses
+               (user_id, symbol, signal_direction, signal_entry,
+                verdict, verdict_conf, recommendation, result_json)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                user_id,
+                result.get("symbol"),
+                result.get("signal_direction"),
+                result.get("signal_entry"),
+                verdict_block.get("verdict"),
+                verdict_block.get("confidence"),
+                verdict_block.get("recommendation"),
+                json.dumps(result, ensure_ascii=False),
+            ),
+        )
+        con.commit()
+        return cur.lastrowid
+
+
+def get_ai_analyses(user_id: int, limit: int = 20) -> list[dict]:
+    with _con() as con:
+        rows = con.execute(
+            """SELECT id, symbol, signal_direction, signal_entry,
+                      verdict, verdict_conf, recommendation, created_at
+               FROM ai_analyses WHERE user_id=?
+               ORDER BY created_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_ai_analysis(analysis_id: int, user_id: int) -> dict | None:
+    with _con() as con:
+        row = con.execute(
+            "SELECT result_json FROM ai_analyses WHERE id=? AND user_id=?",
+            (analysis_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    return json.loads(row["result_json"])
 
 
 def get_ai_quota_info(user: dict) -> dict:

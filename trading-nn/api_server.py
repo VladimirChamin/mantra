@@ -798,7 +798,25 @@ def run_analysis(
 
     # списываем квоту только при успешном завершении
     auth.consume_ai_quota(current_user["id"], req.symbol)
+    # сохраняем результат в БД
+    analysis_id = auth.save_ai_analysis(current_user["id"], result)
+    result["analysis_id"] = analysis_id
     result["quota"] = auth.get_ai_quota_info(current_user)
+    return result
+
+
+@app.get("/api/analyses", tags=["analysis"])
+def list_analyses(current_user: dict = Depends(auth.get_current_user)):
+    """История AI-анализов текущего пользователя (последние 20)."""
+    return {"analyses": auth.get_ai_analyses(current_user["id"])}
+
+
+@app.get("/api/analyses/{analysis_id}", tags=["analysis"])
+def get_analysis(analysis_id: int, current_user: dict = Depends(auth.get_current_user)):
+    """Полный результат AI-анализа по id."""
+    result = auth.get_ai_analysis(analysis_id, current_user["id"])
+    if not result:
+        raise HTTPException(404, "Анализ не найден")
     return result
 
 
