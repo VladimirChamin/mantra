@@ -40,7 +40,7 @@ import trading_nn as tn
 # =============================================================================
 def _prepare(df: pd.DataFrame, cfg: tn.Config):
     feats = tn.add_features(df).replace([np.inf, -np.inf], np.nan)
-    p_up, fwd_ret, fwd_vol, p_fill, valid = tn.triple_barrier_targets(feats, cfg)
+    p_up, fwd_ret, fwd_vol, p_fill, valid, _barrier_hit = tn.triple_barrier_targets(feats, cfg)
 
     exclude = {"open", "high", "low", "close", "volume", "atr"}
     feature_cols = [c for c in feats.columns if c not in exclude]

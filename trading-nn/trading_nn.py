@@ -50,6 +50,7 @@ from volatility import add_vol_features
 import tensorflow as tf
 from tensorflow.keras import layers, Model, Input
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.regularizers import l2
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 
 tf.get_logger().setLevel("ERROR")
@@ -67,14 +68,14 @@ class Config:
     interval: str = "1d"          # таймфрейм (D1 по умолчанию)
     period: str = "6y"            # сколько истории грузить
     # --- разметка целей (Triple-Barrier) ---
-    horizon: int = 6              # горизонт прогноза в барах
-    tp_atr_mult: float = 2.5      # тейк = entry +/- tp_atr_mult * ATR
-    sl_atr_mult: float = 1.5      # стоп = entry -/+ sl_atr_mult * ATR
+    horizon: int = 10             # горизонт прогноза в барах
+    tp_atr_mult: float = 1.5      # тейк = entry +/- tp_atr_mult * ATR
+    sl_atr_mult: float = 1.0      # стоп = entry -/+ sl_atr_mult * ATR
     # --- отложенный ордер (BUYSTOP / SELLSTOP) ---
     entry_offset_mult: float = 0.0  # BUYSTOP = close + offset*ATR, 0 = маркет
     fill_prob_threshold: float = 0.45  # мин. p_fill для выдачи сигнала
     # --- вход модели ---
-    lookback: int = 50            # длина окна (timesteps) на вход сети
+    lookback: int = 32            # длина окна (timesteps) на вход сети
     # --- обучение ---
     val_fraction: float = 0.15    # доля валидации (хронологически последняя)
     epochs: int = 60
@@ -94,15 +95,19 @@ class Config:
 
 # Пресеты под таймфреймы Мосбиржи. Горизонт/окно/глубина истории подобраны
 # с учётом числа баров в торговом дне (D1≈1, H4≈3, H1≈13 баров/день с вечеркой).
+#
+# Барьеры (tp/sl) подобраны так, чтобы за horizon баров они РЕАЛЬНО касались
+# (barrier_hit_rate > 0.5), иначе p_up вырождается в знак шумной доходности и
+# AUC залипает у 0.5. lookback уменьшен на D1 — мало истории, иначе переобучение.
 TIMEFRAME_PRESETS = {
-    "1d": dict(horizon=6,  lookback=50, period="6y",
-               tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.56,
+    "1d": dict(horizon=10, lookback=32, period="6y",
+               tp_atr_mult=1.5, sl_atr_mult=1.0, prob_threshold=0.54,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
-    "4h": dict(horizon=12, lookback=64, period="3y",
-               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.57,
+    "4h": dict(horizon=12, lookback=48, period="3y",
+               tp_atr_mult=1.5, sl_atr_mult=1.0, prob_threshold=0.55,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
-    "1h": dict(horizon=24, lookback=96, period="2y",
-               tp_atr_mult=2.0, sl_atr_mult=1.5, prob_threshold=0.58,
+    "1h": dict(horizon=24, lookback=64, period="2y",
+               tp_atr_mult=1.5, sl_atr_mult=1.0, prob_threshold=0.56,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
 }
 
@@ -663,6 +668,11 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
         fwd_vol — реализованная волатильность на горизонте
         p_fill  — 1 если ордер сработал в течение horizon, 0 если отменён
         valid   — маска валидных точек
+        barrier_hit — маска точек, где метку дал РЕАЛЬНЫЙ барьер (TP/SL коснулись
+                      за horizon), а не fallback по знаку доходности. Доля таких
+                      точек (barrier_hit_rate) — ключевой индикатор качества меток:
+                      если она низкая, p_up ≈ знак шумной H-барной доходности и
+                      AUC обречён колебаться около 0.5.
     """
     close = df["close"].to_numpy()
     high  = df["high"].to_numpy()
@@ -678,6 +688,7 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
     fwd_vol = np.zeros(n, dtype=np.float32)
     p_fill  = np.zeros(n, dtype=np.float32)
     valid   = np.zeros(n, dtype=bool)
+    barrier_hit = np.zeros(n, dtype=bool)
 
     for i in range(n - H):
         a = atr[i]
@@ -700,6 +711,7 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
                     outcome = 1; break
                 if low[i + j] <= sl:
                     outcome = 0; break
+            barrier_hit[i] = outcome is not None   # метку дал реальный барьер?
             if outcome is None:
                 outcome = 1 if close[i + H] > entry else 0
             p_up[i]    = outcome
@@ -724,6 +736,7 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
             long_outcome = 0.0
             long_ret     = 0.0
             long_filled  = 0.0
+            long_hit     = False
             if long_fill_bar is not None:
                 long_filled = 1.0
                 entry_l = buystop
@@ -736,6 +749,7 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
                     if jj >= n: break
                     if high[jj] >= tp_l: outcome_l = 1; break
                     if low[jj]  <= sl_l: outcome_l = 0; break
+                long_hit = outcome_l is not None
                 if outcome_l is None:
                     end_bar = min(i + H, n - 1)
                     outcome_l = 1 if close[end_bar] > entry_l else 0
@@ -752,6 +766,7 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
             short_outcome = 0.0
             short_ret     = 0.0
             short_filled  = 0.0
+            short_hit     = False
             if short_fill_bar is not None:
                 short_filled = 1.0
                 entry_s = sellstop
@@ -764,6 +779,7 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
                     if jj >= n: break
                     if low[jj]  <= tp_s: outcome_s = 1; break
                     if high[jj] >= sl_s: outcome_s = 0; break
+                short_hit = outcome_s is not None
                 if outcome_s is None:
                     end_bar = min(i + H, n - 1)
                     outcome_s = 1 if close[end_bar] < entry_s else 0
@@ -786,10 +802,11 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
                 p_up[i]    = 0.5
                 fwd_ret[i] = 0.0
 
+            barrier_hit[i] = long_hit or short_hit   # хоть одно направление дошло до барьера
             fwd_vol[i] = vol
             valid[i]   = True
 
-    return p_up, fwd_ret, fwd_vol, p_fill, valid
+    return p_up, fwd_ret, fwd_vol, p_fill, valid, barrier_hit
 
 
 # =============================================================================
@@ -808,7 +825,7 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
     """
     feats = add_features(df, interval=cfg.interval,
                          index_df=index_df, htf_df=htf_df)
-    p_up, fwd_ret, fwd_vol, p_fill, valid = triple_barrier_targets(feats, cfg)
+    p_up, fwd_ret, fwd_vol, p_fill, valid, barrier_hit = triple_barrier_targets(feats, cfg)
 
     # выбираем фичи (исключаем сырые цены/объём и абсолютный ATR)
     exclude = {"open", "high", "low", "close", "volume", "atr"}
@@ -855,10 +872,14 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
     end_idx = np.asarray(end_idx)
 
     is_train = end_idx < split
+    # доля меток, заданных реальным касанием барьера (а не fallback по знаку).
+    # Низкое значение → метки шумные, AUC не выйдет за 0.5.
+    barrier_hit_rate = float(barrier_hit[end_idx].mean()) if len(end_idx) else 0.0
     data = {
         "X": Xs, "p_up": yp, "fwd_ret": yr, "fwd_vol": yv, "p_fill": yf,
         "is_train": is_train, "end_idx": end_idx,
         "feature_cols": feature_cols,
+        "barrier_hit_rate": barrier_hit_rate,
     }
     return data, scaler
 
@@ -885,21 +906,26 @@ class LastStep(layers.Layer):
         return super().get_config()
 
 
+# L2-коэффициент для всех обучаемых ядер. На малых финансовых выборках
+# регуляризация важнее ёмкости — она напрямую сдвигает val AUC вверх.
+_L2 = 1e-4
+
+
 def _cnn_block(inp, filters: int = 64):
     """Три параллельных свёрточных пути с разными ядрами → конкатенация."""
     branches = []
     for k in (3, 5, 7):
         x = layers.Conv1D(filters, kernel_size=k, padding="causal",
-                          activation="relu")(inp)
+                          activation="relu", kernel_regularizer=l2(_L2))(inp)
         x = layers.BatchNormalization()(x)
         branches.append(x)
     return layers.Concatenate()(branches)          # (T, 3*filters)
 
 
-def _attention_block(x, num_heads: int = 4, key_dim: int = 32):
+def _attention_block(x, num_heads: int = 2, key_dim: int = 16):
     """Multi-Head Self-Attention + residual + layer norm."""
     attn = layers.MultiHeadAttention(num_heads=num_heads, key_dim=key_dim,
-                                     dropout=0.1)(x, x)
+                                     dropout=0.2)(x, x)
     x = layers.Add()([x, attn])
     return layers.LayerNormalization()(x)
 
@@ -907,30 +933,32 @@ def _attention_block(x, num_heads: int = 4, key_dim: int = 32):
 def build_model(lookback: int, n_features: int, cfg: Config) -> Model:
     inp = Input(shape=(lookback, n_features), name="seq")
 
-    # --- CNN: локальные паттерны на трёх масштабах ---
-    cnn = _cnn_block(inp, filters=32)              # (T, 96)
-    cnn = layers.Dropout(0.1)(cnn)
+    # --- CNN: локальные паттерны на трёх масштабах (ёмкость урезана) ---
+    cnn = _cnn_block(inp, filters=16)              # (T, 48)
+    cnn = layers.Dropout(0.15)(cnn)
 
     # --- BiLSTM: контекст по всей последовательности в обе стороны ---
     x = layers.Bidirectional(
-        layers.LSTM(64, return_sequences=True)
-    )(cnn)                                         # (T, 128)
-    x = layers.Dropout(0.2)(x)
+        layers.LSTM(32, return_sequences=True,
+                    kernel_regularizer=l2(_L2),
+                    recurrent_regularizer=l2(_L2))
+    )(cnn)                                         # (T, 64)
+    x = layers.Dropout(0.3)(x)
 
     # --- Multi-Head Attention: акцент на ключевых барах ---
-    x = _attention_block(x, num_heads=4, key_dim=32)   # (T, 128)
-    x = layers.Dropout(0.15)(x)
+    x = _attention_block(x, num_heads=2, key_dim=16)   # (T, 64)
+    x = layers.Dropout(0.2)(x)
 
     # --- Агрегация: последний шаг + глобальный средний пул → конкатенация ---
-    last = LastStep()(x)                               # (128,)
-    avg  = layers.GlobalAveragePooling1D()(x)          # (128,)
-    x = layers.Concatenate()([last, avg])              # (256,)
+    last = LastStep()(x)                               # (64,)
+    avg  = layers.GlobalAveragePooling1D()(x)          # (64,)
+    x = layers.Concatenate()([last, avg])              # (128,)
 
-    # --- Общий ствол перед головами ---
-    x = layers.Dense(128, activation="gelu")(x)
+    # --- Общий ствол перед головами (урезан + L2) ---
+    x = layers.Dense(64, activation="gelu", kernel_regularizer=l2(_L2))(x)
     x = layers.BatchNormalization()(x)
-    x = layers.Dropout(0.2)(x)
-    x = layers.Dense(64, activation="gelu")(x)
+    x = layers.Dropout(0.3)(x)
+    x = layers.Dense(32, activation="gelu", kernel_regularizer=l2(_L2))(x)
     x = layers.BatchNormalization()(x)
 
     # --- Четыре выходные головы ---
@@ -943,7 +971,9 @@ def build_model(lookback: int, n_features: int, cfg: Config) -> Model:
     model.compile(
         optimizer=Adam(cfg.learning_rate),
         loss=["binary_crossentropy", "huber", "huber", "binary_crossentropy"],
-        loss_weights=[1.0, 1.0, 0.5, 0.8],
+        # p_up — целевая голова (по ней меряем AUC), даём ей доминирующий вес,
+        # чтобы регрессионные головы (fwd_ret/fwd_vol) не перетягивали градиент.
+        loss_weights=[3.0, 0.5, 0.25, 0.5],
         metrics=[["accuracy", tf.keras.metrics.AUC(name="auc")], [], [], ["accuracy"]],
     )
     return model
@@ -975,8 +1005,14 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
     yva = [data["p_up"][va], data["fwd_ret"][va], data["fwd_vol"][va], data["p_fill"][va]]
 
     fill_rate = data["p_fill"][tr].mean()
+    bhr = data.get("barrier_hit_rate", 0.0)
     print(f"[train] train={len(Xtr)}  val={len(Xva)}  features={Xtr.shape[-1]}  "
-          f"baseline p_up={data['p_up'][tr].mean():.3f}  fill_rate={fill_rate:.3f}")
+          f"baseline p_up={data['p_up'][tr].mean():.3f}  fill_rate={fill_rate:.3f}  "
+          f"barrier_hit_rate={bhr:.3f}")
+    if bhr < 0.5:
+        print(f"[train] ⚠ barrier_hit_rate={bhr:.3f} < 0.5 — большинство меток это "
+              f"знак H-барной доходности (шум). Сделайте барьеры достижимее "
+              f"(↓tp_atr_mult/sl_atr_mult или ↑horizon), иначе AUC застрянет у 0.5.")
 
     paths = _paths(cfg)
     if warm_start and os.path.exists(paths["model"]):
@@ -1067,6 +1103,7 @@ def train_universal(symbols: list[str], interval: str = "1d",
     all_yp_va, all_yr_va, all_yv_va, all_yf_va = [], [], [], []
     feature_cols = None
     scalers = {}
+    bhr_list = []   # barrier_hit_rate по инструментам — для усреднённой диагностики
 
     for sym in symbols:
         _log(f"[universal] Загрузка {sym} {interval}…")
@@ -1100,7 +1137,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
         all_yv_tr.append(data["fwd_vol"][tr]); all_yf_tr.append(data["p_fill"][tr])
         all_yp_va.append(data["p_up"][va]); all_yr_va.append(data["fwd_ret"][va])
         all_yv_va.append(data["fwd_vol"][va]); all_yf_va.append(data["p_fill"][va])
-        _log(f"[universal] {sym}: train={tr.sum()} val={va.sum()}")
+        bhr_list.append(data.get("barrier_hit_rate", 0.0))
+        _log(f"[universal] {sym}: train={tr.sum()} val={va.sum()} "
+             f"barrier_hit_rate={data.get('barrier_hit_rate', 0.0):.3f}")
 
     if not all_X_tr:
         raise RuntimeError("Не удалось загрузить ни одного инструмента.")
@@ -1117,7 +1156,12 @@ def train_universal(symbols: list[str], interval: str = "1d",
     Xtr, ytr = Xtr[idx], [y[idx] for y in ytr]
 
     fill_rate = ytr[3].mean()
-    _log(f"[universal] Итого: train={len(Xtr)} val={len(Xva)} features={Xtr.shape[-1]}  fill_rate={fill_rate:.3f}")
+    mean_bhr = float(np.mean(bhr_list)) if bhr_list else 0.0
+    _log(f"[universal] Итого: train={len(Xtr)} val={len(Xva)} features={Xtr.shape[-1]}  "
+         f"fill_rate={fill_rate:.3f}  barrier_hit_rate≈{mean_bhr:.3f}")
+    if mean_bhr < 0.5:
+        _log(f"[universal] ⚠ barrier_hit_rate≈{mean_bhr:.3f} < 0.5 — метки в основном "
+             f"знак H-барной доходности (шум). Сделайте барьеры достижимее.")
 
     pos = ytr[0].mean()
     w_pos, w_neg = 0.5 / (pos + 1e-9), 0.5 / (1 - pos + 1e-9)
