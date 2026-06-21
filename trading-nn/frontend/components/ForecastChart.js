@@ -1,11 +1,39 @@
 "use client";
+import { useRef } from "react";
 
 const fmt = (n) =>
   typeof n === "number"
     ? n.toLocaleString("ru-RU", { maximumFractionDigits: 2 })
     : "—";
 
-export default function ForecastChart({ data }) {
+function saveAsJpeg(svgEl, filename) {
+  const svgData = new XMLSerializer().serializeToString(svgEl);
+  const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+  img.onload = () => {
+    const W = svgEl.viewBox.baseVal.width  || 800;
+    const H = svgEl.viewBox.baseVal.height || 360;
+    const canvas = document.createElement("canvas");
+    canvas.width  = W * 2;   // 2× для чёткости на Retina
+    canvas.height = H * 2;
+    const ctx = canvas.getContext("2d");
+    // тёмный фон чтобы JPEG выглядел как в интерфейсе
+    ctx.fillStyle = "#0f1117";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    const a = document.createElement("a");
+    a.download = filename;
+    a.href = canvas.toDataURL("image/jpeg", 0.92);
+    a.click();
+  };
+  img.src = url;
+}
+
+export default function ForecastChart({ data, isAdmin }) {
+  const svgRef = useRef(null);
+
   if (!data || !data.history?.length || !data.forecast?.length) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
   }
@@ -98,12 +126,28 @@ export default function ForecastChart({ data }) {
       ].join(" ")
     : null;
 
+  const filename = `${data.symbol}_${data.interval}_forecast.jpg`;
+
   return (
     <div className="chart-wrap">
-      <div className="eyebrow" style={{ marginBottom: 8 }}>
-        {data.symbol} · {data.interval} · прогноз на {fN} баров · последняя цена {fmt(last_price)}
+      <div className="eyebrow" style={{ marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span>{data.symbol} · {data.interval} · прогноз на {fN} баров · последняя цена {fmt(last_price)}</span>
+        {isAdmin && (
+          <button
+            onClick={() => svgRef.current && saveAsJpeg(svgRef.current, filename)}
+            title="Сохранить график в JPEG"
+            style={{
+              background: "none", border: "1px solid var(--line)", borderRadius: 6,
+              color: "var(--muted)", cursor: "pointer", padding: "3px 10px",
+              fontSize: 11, fontFamily: "var(--body)", lineHeight: 1.4,
+              transition: "border-color .15s, color .15s",
+            }}
+            onMouseEnter={e => { e.target.style.borderColor = "var(--primary)"; e.target.style.color = "var(--primary)"; }}
+            onMouseLeave={e => { e.target.style.borderColor = "var(--line)";    e.target.style.color = "var(--muted)"; }}
+          >↓ JPEG</button>
+        )}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img"
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img"
            aria-label="OHLC график с прогнозом">
         <defs>
           <clipPath id="plot-fc">

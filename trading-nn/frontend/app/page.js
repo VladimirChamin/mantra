@@ -754,7 +754,7 @@ export default function Dashboard() {
               Прогнозный отросток — ожидаемая траектория к горизонту; конус показывает
               рост неопределённости как vol·√t. Линии — ориентиры входа, стопа и тейка.
             </p>
-            <ForecastChart data={fc} />
+            <ForecastChart data={fc} isAdmin={isAdmin} />
           </div>
 
           <div className="card" style={{ marginTop: 18 }}>
@@ -832,7 +832,7 @@ export default function Dashboard() {
                     <h2 style={{ margin: 0, fontSize: 14 }}>График прогноза из истории</h2>
                     <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
                   </div>
-                  <ForecastChart data={historyFc} />
+                  <ForecastChart data={historyFc} isAdmin={isAdmin} />
                 </div>
               )}
             </div>
