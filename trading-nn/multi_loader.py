@@ -63,4 +63,4 @@ def activate():
     """Регистрирует мультироутер как глобальный источник данных."""
     import trading_nn as tn
     tn.set_data_source(_route)
-    print("[multi_loader] Активирован: crypto→Bybit, stocks/bonds→T-Invest, forex/commodity→FinancialData/T-Invest")
+    print("[multi_loader] Aktivirovan: crypto->Bybit, stocks/bonds->T-Invest, forex/commodity->FinancialData/T-Invest")
