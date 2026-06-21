@@ -240,7 +240,7 @@ export function AnalysisResult({ result }) {
       )}
 
       {result.onchain && (
-        <Section title="On-Chain данные">
+        <Section title="Рыночные данные">
           <OnChainBlock onchain={result.onchain} />
           {v.onchain_summary && <p style={{ fontSize: 13, lineHeight: 1.6, margin: "10px 0 0", opacity: 0.85 }}>{v.onchain_summary}</p>}
         </Section>

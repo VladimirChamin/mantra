@@ -300,6 +300,7 @@ class TrainUniversalReq(BaseModel):
     horizon: Optional[int] = None
     lookback: Optional[int] = None
     warm_start: bool = False
+    direction_filter: str = "both"
 
 
 class FeatureImportanceReq(BaseModel):
@@ -407,6 +408,7 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             period=req.period,
             horizon=req.horizon,
             lookback=req.lookback,
+            direction_filter=req.direction_filter or "both",
         )
 
         if JOBS.is_cancelled(jid):

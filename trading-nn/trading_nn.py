@@ -84,6 +84,7 @@ class Config:
     # --- генерация сигнала на инференсе ---
     prob_threshold: float = 0.56  # минимальная p_up (или 1-p_up) для входа
     min_rr: float = 1.2           # минимальное R:R, иначе FLAT
+    direction_filter: str = "both"  # "long" / "short" / "both"
     # --- сохранение ---
     model_dir: str = "models"
     feature_cols: list = field(default_factory=list)  # заполняется автоматически
@@ -1101,7 +1102,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
                     entry_offset_mult: float | None = None,
                     period: str | None = None,
                     horizon: int | None = None,
-                    lookback: int | None = None):
+                    lookback: int | None = None,
+                    direction_filter: str = "both"):
     """
     Обучает модель класса активов на пуле инструментов.
 
@@ -1122,7 +1124,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
         if log_fn:
             log_fn(msg)
 
-    tag = asset_class.upper()
+    # суффикс направления в имени: CRYPTO_long_1d, CRYPTO_short_1d, CRYPTO_1d
+    dir_suffix = f"_{direction_filter}" if direction_filter in ("long", "short") else ""
+    tag = asset_class.upper() + dir_suffix
     preset = timeframe_preset(interval)
     cfg_proto = Config(symbol=tag, interval=interval,
                        epochs=epochs, model_dir=model_dir,
@@ -1136,6 +1140,7 @@ def train_universal(symbols: list[str], interval: str = "1d",
         cfg_proto.horizon = horizon
     if lookback is not None:
         cfg_proto.lookback = lookback
+    cfg_proto.direction_filter = direction_filter
 
     all_X_tr, all_X_va = [], []
     all_yp_tr, all_yr_tr, all_yv_tr, all_yf_tr = [], [], [], []
@@ -1282,7 +1287,7 @@ def load_artifacts(cfg: Config, active_tags: list[str] | None = None):
         saved = json.load(f)
     cfg.feature_cols = saved["feature_cols"]
     for k in ("lookback", "horizon", "tp_atr_mult", "sl_atr_mult",
-              "prob_threshold", "min_rr"):
+              "prob_threshold", "min_rr", "direction_filter"):
         if k in saved:
             setattr(cfg, k, saved[k])
     return model, scaler
@@ -1372,6 +1377,13 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
             direction = "LONG"
         elif (1 - p_up) >= cfg.prob_threshold and fwd_ret < 0:
             direction = "SHORT"
+
+    # фильтр направления модели
+    df_flt = getattr(cfg, "direction_filter", "both")
+    if df_flt == "long" and direction == "SHORT":
+        direction = "FLAT"; order_type = "MARKET"
+    elif df_flt == "short" and direction == "LONG":
+        direction = "FLAT"; order_type = "MARKET"
 
     raw_rr = tp_dist / (sl_dist + 1e-9)
 

@@ -8,7 +8,8 @@ import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
 import EquityChart from "@/components/EquityChart";
 import JobLog from "@/components/JobLog";
-import AIAnalysis, { AnalysisHistory } from "@/components/AIAnalysis";
+import AIAnalysis from "@/components/AIAnalysis";
+import HistoryPanel from "@/components/HistoryPanel";
 import AdminPanel from "@/components/AdminPanel";
 import Screener from "@/components/Screener";
 import Subscriptions from "@/components/Subscriptions";
@@ -45,11 +46,11 @@ export default function Dashboard() {
   const [assetClasses, setAssetClasses] = useState(null);
   const [activeClass, setActiveClass] = useState("stocks");
   const [classTrainParams, setClassTrainParams] = useState({
-    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
-    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
-    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
-    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
-    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
+    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
+    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
+    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
+    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
 
   // формы (дефолты — дневной таймфрейм, индекс Мосбиржи)
@@ -195,6 +196,7 @@ export default function Dashboard() {
         entry_offset_mult: +(p.entry_offset_mult ?? 0),
         horizon: +(p.horizon || 10),
         lookback: +(p.lookback || 32),
+        direction_filter: p.direction_filter || "both",
       });
       watch(r.job_id);
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -578,6 +580,27 @@ export default function Dashboard() {
                   }))} />
                 <span>Тёплый старт (дообучить существующую модель)</span>
               </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                <span style={{ fontSize: 13, color: "var(--muted)" }}>Фильтр направления:</span>
+                {[["both", "Long & Short"], ["long", "Только Long"], ["short", "Только Short"]].map(([val, label]) => {
+                  const cur = classTrainParams[activeClass]?.direction_filter || "both";
+                  return (
+                    <button key={val} type="button"
+                      onClick={() => setClassTrainParams(p => ({
+                        ...p, [activeClass]: { ...p[activeClass], direction_filter: val }
+                      }))}
+                      style={{
+                        padding: "5px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                        fontFamily: "var(--body)", fontWeight: 500,
+                        border: `1px solid ${cur === val ? (val === "long" ? "var(--long)" : val === "short" ? "var(--short)" : "var(--primary)") : "var(--line)"}`,
+                        background: cur === val ? (val === "long" ? "var(--long-dim)" : val === "short" ? "var(--short-dim)" : "var(--primary)") : "transparent",
+                        color: cur === val ? (val === "long" ? "var(--long)" : val === "short" ? "var(--short)" : "#fff") : "var(--muted)",
+                        transition: "all .15s",
+                      }}
+                    >{label}</button>
+                  );
+                })}
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
                 {[["0", "Маркет"], ["0.3", "BUYSTOP/SELLSTOP"]].map(([val, label]) => {
@@ -797,11 +820,7 @@ export default function Dashboard() {
 
       {tab === "metrics" && isAdmin && (
         <div className="card">
-          <h2>Мониторинг качества моделей</h2>
-          <p className="sub">
-            AUC (площадь под ROC-кривой) показывает, насколько хорошо модель разделяет
-            длинные и короткие сигналы. AUC 0.5 = случайное угадывание, &gt;0.56 = норма.
-          </p>
+          <h2>Нейросети</h2>
           <ModelMetrics />
         </div>
       )}
@@ -848,76 +867,20 @@ export default function Dashboard() {
             />
           </div>
 
-          <div className="card" style={{ marginTop: 18 }}>
-            <h2>История AI-анализов</h2>
-            <p className="sub">Последние 20 анализов. Нажмите на строку чтобы раскрыть полный результат.</p>
-            <AnalysisHistory />
-          </div>
+          <HistoryPanel
+            signals={signals}
+            onDeleteSignal={deleteSignal}
+            onSelectSignal={viewSignalChart}
+            activeSignalId={historyFc?.signal_id}
+          />
 
-          {signals.length > 0 && (
+          {historyFc && (
             <div className="card" style={{ marginTop: 18 }}>
-              <h2>История прогнозов</h2>
-              <p className="sub">Нажмите на строку чтобы открыть график, корзина — удалить.</p>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ opacity: 0.5, textAlign: "left" }}>
-                      {["Дата", "Символ", "ТФ", "Направление", "Вход", "SL", "TP", "P(up)", ""].map(h => (
-                        <th key={h} style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)", fontWeight: 500 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {signals.map((s) => {
-                      const isActive = historyFc?.signal_id === s.id;
-                      const hasChart = !!s.forecast_json;
-                      return (
-                        <tr key={s.id}
-                          onClick={() => hasChart && viewSignalChart(s)}
-                          style={{
-                            borderBottom: "1px solid var(--line)",
-                            background: isActive ? "var(--ink-2)" : "transparent",
-                            cursor: hasChart ? "pointer" : "default",
-                          }}
-                        >
-                          <td style={{ padding: "7px 10px", color: "var(--muted)", fontSize: 12 }}>
-                            {s.created_at ? new Date(s.created_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
-                          </td>
-                          <td style={{ padding: "7px 10px", fontWeight: 700, fontFamily: "var(--mono)" }}>{s.symbol || "—"}</td>
-                          <td style={{ padding: "7px 10px", color: "var(--muted)", fontFamily: "var(--mono)" }}>{s.interval || "—"}</td>
-                          <td style={{ padding: "7px 10px", fontWeight: 700,
-                            color: s.direction === "LONG" ? "var(--long)" : s.direction === "SHORT" ? "var(--short)" : "var(--muted)" }}>
-                            {s.direction || "—"}
-                          </td>
-                          <td style={{ padding: "7px 10px", fontFamily: "var(--mono)" }}>{s.entry != null ? s.entry.toLocaleString("ru-RU") : "—"}</td>
-                          <td style={{ padding: "7px 10px", color: "var(--short)", fontFamily: "var(--mono)" }}>{s.stop_loss != null ? s.stop_loss.toLocaleString("ru-RU") : "—"}</td>
-                          <td style={{ padding: "7px 10px", color: "var(--long)", fontFamily: "var(--mono)" }}>{s.take_profit != null ? s.take_profit.toLocaleString("ru-RU") : "—"}</td>
-                          <td style={{ padding: "7px 10px", fontFamily: "var(--mono)" }}>{s.prob_up != null ? `${(s.prob_up * 100).toFixed(1)}%` : "—"}</td>
-                          <td style={{ padding: "7px 4px", textAlign: "right" }}>
-                            <button
-                              onClick={e => { e.stopPropagation(); deleteSignal(s.id); }}
-                              title="Удалить"
-                              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 15, padding: "2px 6px", borderRadius: 5 }}
-                              onMouseEnter={e => e.currentTarget.style.color = "var(--short)"}
-                              onMouseLeave={e => e.currentTarget.style.color = "var(--muted)"}
-                            >✕</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <h2 style={{ margin: 0 }}>График прогноза из истории</h2>
+                <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
               </div>
-
-              {historyFc && (
-                <div style={{ marginTop: 18, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                    <h2 style={{ margin: 0, fontSize: 14 }}>График прогноза из истории</h2>
-                    <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
-                  </div>
-                  <ForecastChart data={historyFc} isAdmin={isAdmin} />
-                </div>
-              )}
+              <ForecastChart data={historyFc} isAdmin={isAdmin} />
             </div>
           )}
         </>
