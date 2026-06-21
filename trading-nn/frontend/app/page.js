@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { getUser, logout } from "@/lib/auth";
 import SignalTicket from "@/components/SignalTicket";
@@ -25,6 +25,88 @@ function Field({ label, children }) {
     <div className="field">
       <label>{label}</label>
       {children}
+    </div>
+  );
+}
+
+function SymbolTags({ value, onChange }) {
+  const [input, setInput] = useState("");
+  const inputRef = useRef(null);
+
+  const symbols = value
+    ? value.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean)
+    : [];
+
+  function commit(raw) {
+    const newTags = raw.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
+    if (!newTags.length) return;
+    const merged = [...new Set([...symbols, ...newTags])];
+    onChange(merged.join(" "));
+    setInput("");
+  }
+
+  function remove(sym) {
+    onChange(symbols.filter(s => s !== sym).join(" "));
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Enter" || e.key === "," || e.key === " ") {
+      e.preventDefault();
+      commit(input);
+    } else if (e.key === "Backspace" && input === "" && symbols.length) {
+      remove(symbols[symbols.length - 1]);
+    }
+  }
+
+  return (
+    <div
+      onClick={() => inputRef.current?.focus()}
+      style={{
+        display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center",
+        minHeight: 42, padding: "6px 10px",
+        border: "1px solid var(--line)", borderRadius: 10,
+        background: "var(--ink-2)", cursor: "text",
+        transition: "border-color .15s",
+      }}
+      onFocus={() => {}}
+    >
+      {symbols.map(sym => (
+        <span key={sym} style={{
+          display: "inline-flex", alignItems: "center", gap: 5,
+          padding: "3px 10px", borderRadius: 6,
+          background: "color-mix(in srgb, var(--primary) 15%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)",
+          color: "var(--primary)", fontFamily: "var(--mono)",
+          fontSize: 12, fontWeight: 600, lineHeight: 1,
+        }}>
+          {sym}
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); remove(sym); }}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: "var(--primary)", opacity: 0.6, padding: 0,
+              fontSize: 13, lineHeight: 1, display: "flex", alignItems: "center",
+            }}
+            onMouseEnter={e => e.currentTarget.style.opacity = "1"}
+            onMouseLeave={e => e.currentTarget.style.opacity = "0.6"}
+          >×</button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={e => setInput(e.target.value.toUpperCase())}
+        onKeyDown={onKeyDown}
+        onBlur={() => input && commit(input)}
+        placeholder={symbols.length ? "" : "BTCUSDT SBER EURUSD…"}
+        style={{
+          flex: "1 1 100px", minWidth: 80, border: "none", outline: "none",
+          background: "transparent", color: "var(--text)",
+          fontFamily: "var(--mono)", fontSize: 13,
+          padding: "2px 0",
+        }}
+      />
     </div>
   );
 }
@@ -529,13 +611,12 @@ export default function Dashboard() {
                 Одна модель на весь класс. При запросе прогноза сервис автоматически
                 выберет нужную сеть по тикеру.
               </p>
-              <Field label="Инструменты (через пробел или запятую)">
-                <textarea rows={3}
+              <Field label="Инструменты">
+                <SymbolTags
                   value={classTrainParams[activeClass]?.symbols || ""}
-                  onChange={(e) => setClassTrainParams(p => ({
-                    ...p, [activeClass]: { ...p[activeClass], symbols: e.target.value }
+                  onChange={(v) => setClassTrainParams(p => ({
+                    ...p, [activeClass]: { ...p[activeClass], symbols: v }
                   }))}
-                  style={{ width: "100%", resize: "vertical", fontFamily: "monospace", fontSize: 13 }}
                 />
               </Field>
               <div className="row3" style={{ marginTop: 10 }}>
