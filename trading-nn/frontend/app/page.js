@@ -53,18 +53,17 @@ export default function Dashboard() {
     commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
 
-  // формы (дефолты — дневной таймфрейм, индекс Мосбиржи)
   const [train, setTrain] = useState({
-    symbol: "IMOEX", interval: "1d", period: "6y",
+    symbol: "", interval: "1d", period: "6y",
     epochs: 40, horizon: 6, lookback: 50, warm_start: false,
     entry_offset_mult: 0,
   });
   const [bt, setBt] = useState({
-    symbol: "IMOEX", interval: "1d", period: "6y",
+    symbol: "", interval: "1d", period: "6y",
     train_bars: 700, test_bars: 120, epochs: 15, horizon: 6, lookback: 50,
     anchored: false, commission: 0.0005, slippage: 0.0005,
   });
-  const [pred, setPred] = useState({ symbol: "IMOEX", interval: "1d" });
+  const [pred, setPred] = useState({ symbol: "", interval: "1d" });
   const [signal, setSignal] = useState(null);
   const [fc, setFc] = useState(null);
 

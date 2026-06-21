@@ -64,7 +64,7 @@ tf.random.set_seed(42)
 @dataclass
 class Config:
     # --- данные ---
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"          # таймфрейм (D1 по умолчанию)
     period: str = "6y"            # сколько истории грузить
     # --- разметка целей (Triple-Barrier) ---

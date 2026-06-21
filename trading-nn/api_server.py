@@ -245,7 +245,7 @@ class LoginReq(BaseModel):
 # Модели запросов
 # =============================================================================
 class TrainReq(BaseModel):
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"
     period: Optional[str] = None
     epochs: int = 40
@@ -256,7 +256,7 @@ class TrainReq(BaseModel):
 
 
 class BacktestReq(BaseModel):
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"
     period: Optional[str] = None
     train_bars: Optional[int] = None
@@ -270,13 +270,13 @@ class BacktestReq(BaseModel):
 
 
 class PredictReq(BaseModel):
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"
     period: Optional[str] = None
 
 
 class ForecastReq(BaseModel):
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"
     period: Optional[str] = None
     steps: int = 10
@@ -284,7 +284,7 @@ class ForecastReq(BaseModel):
 
 
 class VolatilityReq(BaseModel):
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"
     period: Optional[str] = None
     horizon: int = 30
@@ -304,7 +304,7 @@ class TrainUniversalReq(BaseModel):
 
 
 class FeatureImportanceReq(BaseModel):
-    symbol: str = "IMOEX"
+    symbol: str = ""
     interval: str = "1d"
     n_repeats: int = 3
 
