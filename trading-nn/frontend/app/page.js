@@ -760,7 +760,7 @@ export default function Dashboard() {
           <div className="card" style={{ marginTop: 18 }}>
             <h2>AI-аналитика</h2>
             <p className="sub">
-              DeepSeek анализирует новости (Google Search), COT-позиции (CFTC) и макрофон
+              AI анализирует новости (Google Search), COT-позиции (CFTC) и макрофон
               — и выносит вердикт: подтверждает или опровергает сигнал нейросети.
             </p>
             <AIAnalysis

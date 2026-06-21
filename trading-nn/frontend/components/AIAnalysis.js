@@ -381,7 +381,7 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
           )}
 
           <div style={{ marginTop: 10, fontSize: 11, opacity: 0.3 }}>
-            Анализ: {result.analyzed_at?.replace("T", " ").slice(0, 16)} UTC · DeepSeek AI
+            Анализ: {result.analyzed_at?.replace("T", " ").slice(0, 16)} UTC
           </div>
         </div>
       )}
