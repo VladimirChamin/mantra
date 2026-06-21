@@ -19,10 +19,9 @@ function resolveCssVar(varName, fallback) {
   return val || fallback;
 }
 
-function saveAsJpeg(svgEl, wrapEl, filename) {
+function saveAsJpeg(svgEl, filename) {
   // Читаем реальные цвета из DOM перед сериализацией
   const bg      = resolveCssVar("--panel",   "#ffffff");
-  const bgPage  = resolveCssVar("--ink",     "#f4f6fb");
   const colLong = resolveCssVar("--long",    "#16a34a");
   const colShort= resolveCssVar("--short",   "#dc2626");
   const colMuted= resolveCssVar("--muted-2", "#9aa3ba");
@@ -179,7 +178,7 @@ export default function ForecastChart({ data, isAdmin }) {
         </span>
         {isAdmin && (
           <button
-            onClick={() => svgRef.current && saveAsJpeg(svgRef.current, wrapRef.current, filename)}
+            onClick={() => svgRef.current && saveAsJpeg(svgRef.current, filename)}
             title="Сохранить в JPEG"
             style={{
               background: "none", border: "1px solid var(--line)", borderRadius: 6,
@@ -230,22 +229,23 @@ export default function ForecastChart({ data, isAdmin }) {
 
           {/* прогнозные свечи */}
           {forecastHasOHLC
-            ? forecastCandles.map((c, i) => (
-                <g key={i}>
-                  <line x1={c.cx} y1={c.highY} x2={c.cx} y2={c.lowY}
-                        stroke={c.isUp ? "var(--long)" : "var(--short)"}
-                        strokeWidth="1" opacity="0.55" />
-                  <rect x={c.cx - candleW / 2} y={c.bodyTop}
-                        width={candleW} height={c.bodyH}
-                        fill={c.isUp ? "var(--long)" : "var(--short)"}
-                        opacity="0.28" />
-                  <rect x={c.cx - candleW / 2} y={c.bodyTop}
-                        width={candleW} height={c.bodyH}
-                        fill="none"
-                        stroke={c.isUp ? "var(--long)" : "var(--short)"}
-                        strokeWidth="0.7" opacity="0.6" />
-                </g>
-              ))
+            ? forecastCandles.map((c, i) => {
+                const col = c.isUp ? "var(--long)" : "var(--short)";
+                return (
+                  <g key={i} opacity="0.55">
+                    {/* верхний фитиль: от high до верха тела */}
+                    <line x1={c.cx} y1={c.highY} x2={c.cx} y2={c.bodyTop}
+                          stroke={col} strokeWidth="1" />
+                    {/* нижний фитиль: от низа тела до low */}
+                    <line x1={c.cx} y1={c.bodyTop + c.bodyH} x2={c.cx} y2={c.lowY}
+                          stroke={col} strokeWidth="1" />
+                    {/* тело — непрозрачное, перекрывает фитиль */}
+                    <rect x={c.cx - candleW / 2} y={c.bodyTop}
+                          width={candleW} height={c.bodyH}
+                          fill={col} />
+                  </g>
+                );
+              })
             : forecast.map((p, i) => (
                 <circle key={i} cx={xBar(hN + i)} cy={y(p.mid)} r="2"
                         fill={accentColor} opacity="0.7" />
