@@ -1416,13 +1416,16 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     # сигнал (та же логика, что в predict_signal) — через общий вызов
     sig = predict_signal(cfg, df)
 
-    # ── Pivot Points от последней исторической свечи ──────────────────────────
-    # Классические формулы: PP=(H+L+C)/3,
-    #   R1=2PP-L,  R2=PP+(H-L),  R3=H+2(PP-L)
-    #   S1=2PP-H,  S2=PP-(H-L),  S3=L-2(H-PP)
-    _ph = float(df["high"].iloc[-1])
-    _pl = float(df["low"].iloc[-1])
-    _pc = price0
+    # ── Pivot Points — период агрегации зависит от таймфрейма ─────────────────
+    # D1  → High/Low/Close за последний месяц  (~22 торговых дня)
+    # H4  → за последнюю неделю               (~5 дней × 6 баров = 30 баров)
+    # H1  → за последний день                 (~24 бара)
+    # иное → последняя свеча (fallback)
+    _pivot_bars = {"1d": 22, "4h": 30, "1h": 24}.get(cfg.interval, 1)
+    _pivot_slice = df.iloc[-_pivot_bars:]
+    _ph = float(_pivot_slice["high"].max())
+    _pl = float(_pivot_slice["low"].min())
+    _pc = float(_pivot_slice["close"].iloc[-1])
     _pp  = (_ph + _pl + _pc) / 3
     _r1  = 2 * _pp - _pl
     _r2  = _pp + (_ph - _pl)
@@ -1434,6 +1437,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         "pp": round(_pp, 2),
         "r1": round(_r1, 2), "r2": round(_r2, 2), "r3": round(_r3, 2),
         "s1": round(_s1, 2), "s2": round(_s2, 2), "s3": round(_s3, 2),
+        "period_bars": _pivot_bars,
     }
 
     # ── Прогнозные свечи ──────────────────────────────────────────────────────
