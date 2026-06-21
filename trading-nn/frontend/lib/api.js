@@ -64,6 +64,9 @@ export const api = {
     req(`/api/subscriptions/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
   updateSubscription: (id, payload) =>
     req(`/api/subscriptions/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  // Активные модели
+  getActiveModels: () => req("/api/active_models"),
+  setActiveModels: (tags) => req("/api/active_models", { method: "POST", body: JSON.stringify({ tags }) }),
   // AUC Monitor
   getModelMetrics: () => req("/api/models/metrics"),
   deleteModel: (tag) => req(`/api/models/${tag}`, { method: "DELETE" }),

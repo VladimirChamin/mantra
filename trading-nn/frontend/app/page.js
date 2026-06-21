@@ -45,11 +45,11 @@ export default function Dashboard() {
   const [assetClasses, setAssetClasses] = useState(null);
   const [activeClass, setActiveClass] = useState("stocks");
   const [classTrainParams, setClassTrainParams] = useState({
-    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
-    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
-    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
-    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
-    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
+    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
+    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
+    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
+    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
 
   // формы (дефолты — дневной таймфрейм, индекс Мосбиржи)
@@ -169,6 +169,18 @@ export default function Dashboard() {
     } catch (e) { setErr(e.message); setBusy(false); }
   }
 
+  function setClassInterval(iv) {
+    const p = meta?.presets?.[iv];
+    setClassTrainParams(prev => ({
+      ...prev,
+      [activeClass]: {
+        ...prev[activeClass],
+        interval: iv,
+        ...(p ? { horizon: p.horizon, lookback: p.lookback, period: p.period } : {}),
+      },
+    }));
+  }
+
   async function startClassTrain() {
     setErr(""); setBusy(true); setJob(null);
     const p = classTrainParams[activeClass] || {};
@@ -181,6 +193,8 @@ export default function Dashboard() {
         epochs: +(p.epochs || 40),
         period: p.period || "6y",
         entry_offset_mult: +(p.entry_offset_mult ?? 0),
+        horizon: +(p.horizon || 10),
+        lookback: +(p.lookback || 32),
       });
       watch(r.job_id);
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -223,16 +237,20 @@ export default function Dashboard() {
 
   async function startFeatureImportance() {
     setErr(""); setBusy(true); setJob(null); setFi(null);
+    const p = classTrainParams[activeClass] || {};
+    const sym = (p.symbols || "").trim().split(/[\s,]+/).filter(Boolean)[0] || activeClass.toUpperCase();
     try {
-      const r = await api.runFeatureImportance({ symbol: train.symbol, interval: train.interval, n_repeats: 3 });
+      const r = await api.runFeatureImportance({ symbol: sym, interval: p.interval || "1d", n_repeats: 3 });
       watch(r.job_id);
     } catch (e) { setErr(e.message); setBusy(false); }
   }
 
   async function loadFeatureImportance() {
     setFiLoading(true);
+    const p = classTrainParams[activeClass] || {};
+    const sym = (p.symbols || "").trim().split(/[\s,]+/).filter(Boolean)[0] || activeClass.toUpperCase();
     try {
-      const r = await api.getFeatureImportance(train.symbol, train.interval);
+      const r = await api.getFeatureImportance(sym, p.interval || "1d");
       setFi(r);
     } catch (e) { setErr(e.message); }
     setFiLoading(false);
@@ -254,11 +272,10 @@ export default function Dashboard() {
 
   // Подменю Админки
   const adminSubTabs = [
-    ["train", "Обучение"],
-    ["classes", "Классы активов"],
+    ["classes", "Обучение"],
     ["backtest", "Walk-forward"],
     ["retrain", "Расписание"],
-    ["metrics", "Метрики AUC"],
+    ["metrics", "Нейросети"],
   ];
 
   const isAdminSub = adminSubTabs.some(([k]) => k === tab);
@@ -523,9 +540,7 @@ export default function Dashboard() {
               <div className="row3" style={{ marginTop: 10 }}>
                 <Field label="Таймфрейм">
                   <select value={classTrainParams[activeClass]?.interval || "1d"}
-                    onChange={(e) => setClassTrainParams(p => ({
-                      ...p, [activeClass]: { ...p[activeClass], interval: e.target.value }
-                    }))}>
+                    onChange={(e) => setClassInterval(e.target.value)}>
                     {intervals.map((i) => <option key={i}>{i}</option>)}
                   </select>
                 </Field>
@@ -542,6 +557,27 @@ export default function Dashboard() {
                     }))} />
                 </Field>
               </div>
+              <div className="row3" style={{ marginTop: 6 }}>
+                <Field label="Горизонт">
+                  <input className="num" value={classTrainParams[activeClass]?.horizon || 10}
+                    onChange={(e) => setClassTrainParams(p => ({
+                      ...p, [activeClass]: { ...p[activeClass], horizon: e.target.value }
+                    }))} />
+                </Field>
+                <Field label="Длина окна">
+                  <input className="num" value={classTrainParams[activeClass]?.lookback || 32}
+                    onChange={(e) => setClassTrainParams(p => ({
+                      ...p, [activeClass]: { ...p[activeClass], lookback: e.target.value }
+                    }))} />
+                </Field>
+              </div>
+              <label className="check" style={{ marginTop: 4 }}>
+                <input type="checkbox" checked={classTrainParams[activeClass]?.warm_start || false}
+                  onChange={(e) => setClassTrainParams(p => ({
+                    ...p, [activeClass]: { ...p[activeClass], warm_start: e.target.checked }
+                  }))} />
+                <span>Тёплый старт (дообучить существующую модель)</span>
+              </label>
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
                 {[["0", "Маркет"], ["0.3", "BUYSTOP/SELLSTOP"]].map(([val, label]) => {
@@ -578,14 +614,61 @@ export default function Dashboard() {
             </div>
 
             <div className="card">
-              <h2>Прогресс</h2>
-              <p className="sub">
-                Сервис автоматически определит класс актива при запросе прогноза.
-                Приоритет: индивидуальная модель → модель класса → универсальная.
-              </p>
-              {job && job.kind === "train_universal" ? <JobLog job={job} /> :
+              <h2>Прогресс обучения</h2>
+              {job && (job.kind === "train_universal" || job.kind === "feature_importance") ? <JobLog job={job} /> :
                 <div className="empty">Выберите класс слева и запустите обучение.</div>}
+              {trainSignal ? <div style={{ marginTop: 16 }}><SignalTicket signal={trainSignal} /></div> : null}
             </div>
+          </div>
+
+          {/* Feature Importance */}
+          <div className="card" style={{ marginTop: 18 }}>
+            <h2>Feature Importance</h2>
+            <p className="sub">
+              Permutation importance: насколько ухудшается AUC модели при случайном перемешивании каждого признака.
+              Чем больше значение — тем важнее признак.
+            </p>
+            <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <button className="btn" style={{ width: "auto", padding: "9px 22px" }}
+                onClick={startFeatureImportance} disabled={busy || !online}>
+                {busy && job?.kind === "feature_importance" ? "Считаю…" : "Рассчитать"}
+              </button>
+              <button className="btn ghost" style={{ width: "auto", padding: "9px 22px" }}
+                onClick={loadFeatureImportance} disabled={fiLoading}>
+                {fiLoading ? "Загрузка…" : "Загрузить последний"}
+              </button>
+            </div>
+
+            {(fi || fiResult) && (() => {
+              const data = fi || fiResult;
+              const features = data.features || data.top10 || [];
+              const topN = features.slice(0, 20);
+              const maxImp = Math.max(...topN.map(f => Math.abs(f.importance)), 0.0001);
+              return (
+                <div>
+                  {data.base_auc != null && (
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+                      Base AUC: <strong>{data.base_auc}</strong>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    {topN.map((f) => (
+                      <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 22, fontSize: 11, color: "var(--muted)", textAlign: "right", flexShrink: 0 }}>{f.rank}</div>
+                        <div style={{ width: 160, fontSize: 12, fontFamily: "var(--mono)", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.feature}</div>
+                        <div style={{ flex: 1, height: 16, background: "var(--ink-2)", borderRadius: 3, overflow: "hidden" }}>
+                          <div style={{ height: "100%", borderRadius: 3, width: `${Math.abs(f.importance) / maxImp * 100}%`, background: f.importance > 0 ? "var(--primary)" : "var(--short)", transition: "width .3s" }} />
+                        </div>
+                        <div style={{ width: 60, fontSize: 11, fontFamily: "var(--mono)", color: f.importance > 0 ? "var(--long)" : "var(--short)", textAlign: "right", flexShrink: 0 }}>
+                          {f.importance > 0 ? "+" : ""}{f.importance.toFixed(4)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {features.length > 20 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>Показано 20 из {features.length} признаков</div>}
+                </div>
+              );
+            })()}
           </div>
         </>
       )}
@@ -730,7 +813,6 @@ export default function Dashboard() {
           <div className="grid">
             <div className="card">
               <h2>Прогноз и сигнал</h2>
-              <p className="sub">Модель оценивает последнее окно: выдаёт вход / стоп / тейк и строит прогноз на 10 баров.</p>
               <div className="row2">
                 <Field label="Инструмент"><SymbolInput value={pred.symbol} instruments={instruments} onChange={v => setPred({ ...pred, symbol: v })} /></Field>
                 <Field label="Таймфрейм">
@@ -747,26 +829,17 @@ export default function Dashboard() {
 
             <div className="card">
               <h2>Торговый тикет</h2>
-              <p className="sub">Уровни рассчитаны из прогноза волатильности модели.</p>
               <SignalTicket signal={signal} />
             </div>
           </div>
 
           <div className="card" style={{ marginTop: 18 }}>
             <h2>График прогноза</h2>
-            <p className="sub">
-              Прогнозный отросток — ожидаемая траектория к горизонту; конус показывает
-              рост неопределённости как vol·√t. Линии — ориентиры входа, стопа и тейка.
-            </p>
             <ForecastChart data={fc} isAdmin={isAdmin} />
           </div>
 
           <div className="card" style={{ marginTop: 18 }}>
             <h2>AI-аналитика</h2>
-            <p className="sub">
-              AI анализирует новости (Google Search), COT-позиции (CFTC) и макрофон
-              — и выносит вердикт: подтверждает или опровергает сигнал нейросети.
-            </p>
             <AIAnalysis
               symbol={pred.symbol}
               signal={signal}

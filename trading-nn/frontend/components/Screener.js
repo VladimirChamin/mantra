@@ -53,7 +53,7 @@ export default function Screener() {
     setDone(false);
     setProgress(0);
 
-    const items = WATCHLIST;
+    const items = classFilter === "all" ? WATCHLIST : WATCHLIST.filter(w => w.class === classFilter);
     const newResults = [];
     const newErrors = [];
 
@@ -80,7 +80,7 @@ export default function Screener() {
     setErrors(newErrors);
     setScanning(false);
     setDone(true);
-  }, [interval]);
+  }, [interval, classFilter]);
 
   function toggleSort(col) {
     if (sortBy === col) setSortDir(d => -d);
@@ -152,7 +152,7 @@ export default function Screener() {
               <div style={{ height: "100%", background: "var(--primary)", width: `${progress}%`, transition: "width .3s" }} />
             </div>
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-              Обработано {Math.round((progress / 100) * WATCHLIST.length)} / {WATCHLIST.length} инструментов
+              Обработано {Math.round((progress / 100) * (classFilter === "all" ? WATCHLIST.length : WATCHLIST.filter(w => w.class === classFilter).length))} / {classFilter === "all" ? WATCHLIST.length : WATCHLIST.filter(w => w.class === classFilter).length} инструментов
             </div>
           </div>
         )}

@@ -98,6 +98,13 @@ def init_db() -> None:
             created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
         );
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS active_models (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag        TEXT NOT NULL UNIQUE,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
     # миграции для существующих БД
     for _col_sql in [
         "ALTER TABLE users ADD COLUMN ai_quota INTEGER NOT NULL DEFAULT 10",
@@ -508,3 +515,26 @@ def get_ai_quota_info(user: dict) -> dict:
         "remaining": max(0, limit - used) if limit < 999999 else None,
         "ok": ok,
     }
+
+
+# ---------------------------------------------------------------------------
+# Активные модели (выбор пользователем для прогнозов)
+# ---------------------------------------------------------------------------
+
+def get_active_models() -> list[str]:
+    """Возвращает список тегов активных моделей (пустой = все активны)."""
+    with _con() as con:
+        rows = con.execute("SELECT tag FROM active_models ORDER BY tag").fetchall()
+    return [r["tag"] for r in rows]
+
+
+def set_active_models(tags: list[str]) -> None:
+    """Устанавливает набор активных моделей. Пустой список = все модели активны."""
+    with _con() as con:
+        con.execute("DELETE FROM active_models")
+        for tag in tags:
+            con.execute(
+                "INSERT OR REPLACE INTO active_models (tag, updated_at) VALUES (?, datetime('now'))",
+                (tag,)
+            )
+        con.commit()

@@ -297,12 +297,14 @@ def class_model_tag(asset_class: str, interval: str) -> str:
     return f"{asset_class.upper()}_{interval}"
 
 
-def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models") -> str:
+def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models",
+                      active_tags: list[str] | None = None) -> str:
     """
     Определяет какую модель использовать для данного тикера:
     1. Индивидуальная модель (SBER_1d)     — наивысший приоритет
     2. Модель класса активов (STOCKS_1d)   — если обучена
     3. Универсальная модель (UNIVERSAL_1d) — fallback
+    active_tags — если задан (непустой), только модели из этого списка считаются доступными.
     Выбрасывает FileNotFoundError если ни одна не найдена.
     """
     candidates = [
@@ -312,12 +314,16 @@ def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models") -> 
     ]
     for tag in candidates:
         path = os.path.join(model_dir, f"{tag}_model.keras")
-        if os.path.exists(path):
-            return tag
+        if not os.path.exists(path):
+            continue
+        # если задан список активных — тег должен быть в нём
+        if active_tags and tag not in active_tags:
+            continue
+        return tag
     raise FileNotFoundError(
         f"Модель не найдена для '{symbol}' ({interval}). "
         f"Проверено: {', '.join(candidates)}. "
-        "Обучите модель через вкладку «Обучение» или «Классы активов»."
+        "Обучите модель или активируйте нужную в разделе «Нейросети»."
     )
 
 
@@ -1061,12 +1067,41 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
     return model, scaler
 
 
+def _save_versioned(cfg: "Config", model, val_auc: float) -> str:
+    """Сохраняет копию модели с версионным индексом: TAG_interval_vN.keras.
+    Возвращает путь к версионному файлу."""
+    import re, shutil
+    base = f"{cfg.tag}_{cfg.interval}"
+    pattern = re.compile(rf"^{re.escape(base)}_v(\d+)_model\.keras$")
+    existing = [
+        int(m.group(1))
+        for f in os.listdir(cfg.model_dir)
+        if (m := pattern.match(f))
+    ]
+    n = max(existing, default=0) + 1
+    ver_tag = f"{base}_v{n}"
+    ver_model  = os.path.join(cfg.model_dir, f"{ver_tag}_model.keras")
+    ver_scaler = os.path.join(cfg.model_dir, f"{ver_tag}_scaler.pkl")
+    ver_config = os.path.join(cfg.model_dir, f"{ver_tag}_config.json")
+    ver_metrics = os.path.join(cfg.model_dir, f"{ver_tag}_metrics.json")
+    src = _paths(cfg)
+    shutil.copy2(src["model"],  ver_model)
+    shutil.copy2(src["scaler"], ver_scaler)
+    shutil.copy2(src["config"], ver_config)
+    # версионные метрики: те же данные но с тегом версии
+    if os.path.exists(src["model"].replace("_model.keras", "_metrics.json")):
+        shutil.copy2(src["model"].replace("_model.keras", "_metrics.json"), ver_metrics)
+    return ver_model
+
+
 def train_universal(symbols: list[str], interval: str = "1d",
                     epochs: int = 60, model_dir: str = "models",
                     asset_class: str = "UNIVERSAL",
                     extra_callbacks=None, log_fn=None, cancel_event=None,
                     entry_offset_mult: float | None = None,
-                    period: str | None = None):
+                    period: str | None = None,
+                    horizon: int | None = None,
+                    lookback: int | None = None):
     """
     Обучает модель класса активов на пуле инструментов.
 
@@ -1097,6 +1132,10 @@ def train_universal(symbols: list[str], interval: str = "1d",
         cfg_proto.entry_offset_mult = entry_offset_mult
     if period is not None:
         cfg_proto.period = period
+    if horizon is not None:
+        cfg_proto.horizon = horizon
+    if lookback is not None:
+        cfg_proto.lookback = lookback
 
     all_X_tr, all_X_va = [], []
     all_yp_tr, all_yr_tr, all_yv_tr, all_yf_tr = [], [], [], []
@@ -1198,6 +1237,10 @@ def train_universal(symbols: list[str], interval: str = "1d",
 
     val_auc = _compute_val_auc(model, Xva, yva[0])
     _save_metrics(cfg_proto, val_auc)
+
+    # версионирование: сохраняем копию с индексом TAG_interval_vN.keras
+    _save_versioned(cfg_proto, model, val_auc)
+
     _log(f"[universal] Модель сохранена: {paths['model']}  val_auc={val_auc:.4f}")
     _log(f"[universal] Обучена на: {', '.join(scalers.keys())}")
     return model, scalers
@@ -1218,8 +1261,9 @@ def retrain(cfg: Config):
 # =============================================================================
 # 6. ИНФЕРЕНС: генерация торгового сигнала (entry / SL / TP)
 # =============================================================================
-def load_artifacts(cfg: Config):
-    tag = resolve_model_tag(cfg.symbol, cfg.interval, cfg.model_dir)
+def load_artifacts(cfg: Config, active_tags: list[str] | None = None):
+    tag = resolve_model_tag(cfg.symbol, cfg.interval, cfg.model_dir,
+                            active_tags=active_tags or None)
     # если выбрана не индивидуальная модель — логируем
     own_tag = cfg.tag
     if tag != own_tag:
@@ -1387,7 +1431,8 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
 
 
 def forecast(cfg: Config, steps: int = 10, history: int = 50,
-             band_k: float = 1.0, df: pd.DataFrame | None = None) -> dict:
+             band_k: float = 1.0, df: pd.DataFrame | None = None,
+             active_tags: list[str] | None = None) -> dict:
     """
     Возвращает данные для графика прогноза:
         history  — последние `history` баров (time, close)
@@ -1400,7 +1445,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     ожидаемой доходности к горизонту, а конус — оценка волатильности.
     Это ориентир, а не предсказание точной цены каждого бара.
     """
-    model, scaler = load_artifacts(cfg)
+    model, scaler = load_artifacts(cfg, active_tags=active_tags)
     if df is None:
         df = load_ohlcv(cfg)
 

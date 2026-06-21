@@ -168,13 +168,23 @@ export default function ModelMetrics() {
   const [saved, setSaved]           = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // модель для удаления
   const [deleting, setDeleting]     = useState(false);
+  // активные модели: null = "все активны", иначе Set тегов
+  const [activeTags, setActiveTags] = useState(null);
+  const [savingActive, setSavingActive] = useState(false);
+  const [savedActive, setSavedActive] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, mon] = await Promise.all([api.getModelMetrics(), api.getAucMonitor()]);
+      const [m, mon, act] = await Promise.all([
+        api.getModelMetrics(),
+        api.getAucMonitor(),
+        api.getActiveModels(),
+      ]);
       setMetrics(m.metrics || []);
       setMonitor(mon);
+      // пустой список = все активны → null
+      setActiveTags(act.active?.length ? new Set(act.active) : null);
     } catch (e) {
       console.error(e);
     } finally {
@@ -238,6 +248,40 @@ export default function ModelMetrics() {
     } catch (e) {
       alert(e.message);
     }
+  }
+
+  function toggleActive(tag) {
+    setActiveTags(prev => {
+      if (prev === null) {
+        // все были активны → выключаем один (все остальные остаются)
+        const next = new Set(metrics.map(m => m.tag));
+        next.delete(tag);
+        return next;
+      }
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      // если все включены → null (все активны)
+      return next.size === metrics.length ? null : next;
+    });
+  }
+
+  async function handleSaveActive() {
+    setSavingActive(true);
+    try {
+      const tags = activeTags ? [...activeTags] : [];
+      await api.setActiveModels(tags);
+      setSavedActive(true);
+      setTimeout(() => setSavedActive(false), 2000);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setSavingActive(false);
+    }
+  }
+
+  function isActive(tag) {
+    return activeTags === null || activeTags.has(tag);
   }
 
   const critical = metrics.filter(m => m.status === "critical").length;
@@ -339,23 +383,63 @@ export default function ModelMetrics() {
         </div>
       )}
 
+      {/* Выбор активных моделей */}
+      <div style={{
+        padding: "12px 18px", borderRadius: 10, marginBottom: 16,
+        border: "1px solid var(--line)", background: "var(--panel)",
+        display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)" }}>
+            Активные модели для сигналов
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
+            {activeTags === null
+              ? "Все модели используются для скриннера и подписок"
+              : activeTags.size === 0
+              ? "Ни одна модель не активна — сигналы не будут генерироваться"
+              : `Активно: ${[...activeTags].join(", ")}`}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="btn" style={{ width: "auto", padding: "7px 18px", fontSize: 13 }}
+            onClick={handleSaveActive} disabled={savingActive}>
+            {savingActive ? "Сохраняю…" : "Применить"}
+          </button>
+          {savedActive && <span style={{ fontSize: 13, color: "var(--long)" }}>✓ Сохранено</span>}
+        </div>
+      </div>
+
       {/* Таблица моделей */}
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ opacity: 0.5, textAlign: "left" }}>
-              {["Модель", "ТФ", "AUC", "Тренд", "Статус", "Обновлено", ""].map(h => (
+              {["Активна", "Модель", "ТФ", "AUC", "Тренд", "Статус", "Обновлено", ""].map(h => (
                 <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", opacity: 0.4 }}>Загрузка…</td></tr>
+              <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", opacity: 0.4 }}>Загрузка…</td></tr>
             ) : metrics.length === 0 ? (
-              <tr><td colSpan={7} style={{ padding: 24, textAlign: "center", opacity: 0.4 }}>Моделей нет</td></tr>
+              <tr><td colSpan={8} style={{ padding: 24, textAlign: "center", opacity: 0.4 }}>Моделей нет</td></tr>
             ) : metrics.map(m => (
-              <tr key={m.tag} style={{ borderBottom: "1px solid var(--line)" }}>
+              <tr key={m.tag} style={{
+                borderBottom: "1px solid var(--line)",
+                opacity: isActive(m.tag) ? 1 : 0.45,
+                transition: "opacity .2s",
+              }}>
+                <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={isActive(m.tag)}
+                    onChange={() => toggleActive(m.tag)}
+                    style={{ accentColor: "var(--primary)", width: 16, height: 16, cursor: "pointer" }}
+                    title={isActive(m.tag) ? "Деактивировать" : "Активировать"}
+                  />
+                </td>
                 <td style={{ padding: "10px 10px", fontFamily: "var(--mono)", fontSize: 12 }}>{m.symbol}</td>
                 <td style={{ padding: "10px 10px", color: "var(--muted)", fontSize: 12 }}>{m.interval}</td>
                 <td style={{ padding: "10px 10px", minWidth: 160 }}>

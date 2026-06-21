@@ -69,7 +69,9 @@ subs_mod.init_subscriptions_db()
 def _forecast_for_sub(symbol: str, interval: str) -> dict:
     """Вызывается из фонового сканера подписок."""
     cfg = tn.make_config(symbol, interval)
-    return tn.forecast(cfg, steps=5, history=50)
+    active = auth.get_active_models()
+    return tn.forecast(cfg, steps=5, history=50,
+                       active_tags=active if active else None)
 
 
 subs_mod.set_forecast_fn(_forecast_for_sub)
@@ -294,7 +296,10 @@ class TrainUniversalReq(BaseModel):
     interval: str = "1d"
     epochs: int = 40
     period: Optional[str] = None
-    entry_offset_mult: Optional[float] = None  # 0 = маркет, >0 = BUYSTOP/SELLSTOP
+    entry_offset_mult: Optional[float] = None
+    horizon: Optional[int] = None
+    lookback: Optional[int] = None
+    warm_start: bool = False
 
 
 class FeatureImportanceReq(BaseModel):
@@ -400,6 +405,8 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             cancel_event=JOBS.cancel_event(jid),
             entry_offset_mult=req.entry_offset_mult,
             period=req.period,
+            horizon=req.horizon,
+            lookback=req.lookback,
         )
 
         if JOBS.is_cancelled(jid):
@@ -762,7 +769,9 @@ def forecast(
 ):
     cfg = tn.make_config(req.symbol, req.interval, period=req.period)
     try:
-        result = tn.forecast(cfg, steps=req.steps, history=req.history)
+        active = auth.get_active_models()  # [] = все активны
+        result = tn.forecast(cfg, steps=req.steps, history=req.history,
+                             active_tags=active if active else None)
         # сохраняем сигнал в историю вместе с данными для графика
         if result.get("signal"):
             import json as _json
@@ -777,7 +786,7 @@ def forecast(
             auth.save_signal(current_user["id"], sig, forecast_json=fc_json)
         return result
     except FileNotFoundError:
-        raise HTTPException(404, "Модель не найдена. Сначала обучите её.")
+        raise HTTPException(404, "Модель не найдена. Сначала обучите её или активируйте нужную модель в разделе «Нейросети».")
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -1096,6 +1105,24 @@ def check_auc_now(_=Depends(auth.require_admin)):
     """Немедленно запускает проверку AUC всех моделей в фоне."""
     _run_async(_run_auc_check)
     return {"ok": True, "message": "Проверка AUC запущена в фоне"}
+
+
+# =============================================================================
+# Активные модели (выбор для прогнозов)
+# =============================================================================
+class ActiveModelsReq(BaseModel):
+    tags: list[str]
+
+
+@app.get("/api/active_models", tags=["models"])
+def get_active_models(_=Depends(auth.require_admin)):
+    return {"active": auth.get_active_models()}
+
+
+@app.post("/api/active_models", tags=["models"])
+def set_active_models(req: ActiveModelsReq, _=Depends(auth.require_admin)):
+    auth.set_active_models(req.tags)
+    return {"active": req.tags}
 
 
 if __name__ == "__main__":
