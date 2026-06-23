@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 
 const fmtN = (n, digits = 2) =>
   typeof n === "number"
@@ -8,7 +8,6 @@ const fmtN = (n, digits = 2) =>
 
 const fmtPct = (n) => (typeof n === "number" ? `${(n * 100).toFixed(1)}%` : "—");
 
-// Резолвит CSS-переменную в hex/rgb через временный элемент
 function resolveCssVar(varName, fallback) {
   if (typeof document === "undefined") return fallback;
   const el = document.createElement("div");
@@ -59,7 +58,6 @@ function saveAsJpeg(svgEl, filename) {
   img.src = url;
 }
 
-// Определяет статус прогноза по последней прогнозной свече
 function resolveStatus(fc, levels) {
   if (!fc || !levels || !levels.direction || levels.direction === "FLAT") return null;
   const lastClose = fc[fc.length - 1]?.close ?? fc[fc.length - 1]?.mid;
@@ -85,6 +83,11 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   const [showIndicators, setShowIndicators] = useState(true);
   const [hover, setHover]                   = useState(null);
 
+  // zoom/pan state: visibleStart и visibleCount — диапазон видимых баров
+  const [visStart, setVisStart] = useState(0);
+  const [visCount, setVisCount] = useState(null); // null = показать все
+  const dragRef = useRef(null); // { startX, startVisStart }
+
   if (!data || !data.history?.length || !data.forecast?.length) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
   }
@@ -94,6 +97,10 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   const fN = forecast.length;
   const nowIdx = hN - 1;
   const totalBars = hN + fN;
+
+  // Инициализируем visCount после получения данных
+  const effectiveVisCount = visCount ?? totalBars;
+  const effectiveVisStart = Math.max(0, Math.min(visStart, totalBars - effectiveVisCount));
 
   const dir = (levels?.direction || "FLAT").toLowerCase();
   const accentColor = dir === "long" ? "var(--long)" : dir === "short" ? "var(--short)" : "var(--muted-2)";
@@ -116,15 +123,12 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     { k: "S3", v: pl.s3, c: "#3b82f6", dash: "2 4" },
   ] : [];
 
-  // actuals — реальные бары за период прогноза (могут прийти снаружи)
   const actualBars = actuals || data.actuals || [];
 
-  // Индикаторные ряды для отрисовки (порядок — по истории)
   const indRows = indicators
     ? history.map(bar => indicators[bar.time] || null)
     : history.map(() => null);
 
-  // Ряды для ценового SVG (абсолютные цены)
   const sma10Pts  = indRows.map((r, i) => r?.sma10  != null ? { x: i, v: r.sma10  } : null).filter(Boolean);
   const sma20Pts  = indRows.map((r, i) => r?.sma20  != null ? { x: i, v: r.sma20  } : null).filter(Boolean);
   const sma50Pts  = indRows.map((r, i) => r?.sma50  != null ? { x: i, v: r.sma50  } : null).filter(Boolean);
@@ -133,7 +137,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   const bbUPts    = indRows.map((r, i) => r?.bb_upper != null ? { x: i, v: r.bb_upper } : null).filter(Boolean);
   const bbMPts    = indRows.map((r, i) => r?.bb_mid   != null ? { x: i, v: r.bb_mid   } : null).filter(Boolean);
   const bbLPts    = indRows.map((r, i) => r?.bb_lower != null ? { x: i, v: r.bb_lower } : null).filter(Boolean);
-  // RSI и MACD — отдельные панели
   const rsiPts    = indRows.map((r, i) => r?.rsi      != null ? { x: i, v: r.rsi      } : null).filter(Boolean);
   const macdPts   = indRows.map((r, i) => r?.macd     != null ? { x: i, v: r.macd     } : null).filter(Boolean);
   const macdSPts  = indRows.map((r, i) => r?.macd_sig != null ? { x: i, v: r.macd_sig } : null).filter(Boolean);
@@ -141,27 +144,44 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
   const hasIndicators = indicators && Object.keys(indicators).length > 0;
 
+  // ── Видимый диапазон ──────────────────────────────────────────────────────
+  const visEnd = Math.min(effectiveVisStart + effectiveVisCount, totalBars);
+  const visibleBars = visEnd - effectiveVisStart;
+
+  // Все бары в видимом диапазоне для Y-scale
+  const visibleHistory  = history.slice(
+    Math.max(0, effectiveVisStart),
+    Math.min(hN, visEnd)
+  );
+  const visibleFcStart  = Math.max(0, effectiveVisStart - hN);
+  const visibleFcEnd    = Math.max(0, visEnd - hN);
+  const visibleForecast = forecast.slice(visibleFcStart, visibleFcEnd);
+  const visibleActuals  = actualBars.slice(visibleFcStart, visibleFcEnd);
+
   const vals = [
-    ...history.map(c => c.high), ...history.map(c => c.low),
-    ...forecast.map(p => forecastHasOHLC ? p.high : (p.upper ?? p.mid)),
-    ...forecast.map(p => forecastHasOHLC ? p.low  : (p.lower ?? p.mid)),
+    ...visibleHistory.map(c => c.high), ...visibleHistory.map(c => c.low),
+    ...visibleForecast.map(p => forecastHasOHLC ? p.high : (p.upper ?? p.mid)),
+    ...visibleForecast.map(p => forecastHasOHLC ? p.low  : (p.lower ?? p.mid)),
     ...(showIndicators ? pivotLines.map(l => l.v) : []),
-    ...(showIndicators ? bbUPts.map(p => p.v) : []),
-    ...(showIndicators ? bbLPts.map(p => p.v) : []),
-    ...actualBars.map(b => b.high),
-    ...actualBars.map(b => b.low),
+    ...(showIndicators ? bbUPts.filter(p => p.x >= effectiveVisStart && p.x < visEnd).map(p => p.v) : []),
+    ...(showIndicators ? bbLPts.filter(p => p.x >= effectiveVisStart && p.x < visEnd).map(p => p.v) : []),
+    ...visibleActuals.map(b => b.high),
+    ...visibleActuals.map(b => b.low),
   ];
   if (hasTrade) vals.push(levels.entry, levels.stop_loss, levels.take_profit);
-  let lo = Math.min(...vals), hi = Math.max(...vals);
+  let lo = vals.length ? Math.min(...vals) : 0;
+  let hi = vals.length ? Math.max(...vals) : 1;
   const pad = (hi - lo) * 0.08 || hi * 0.02 || 1;
   lo -= pad; hi += pad;
 
   const W = 800, H = 320, padL = 8, padR = 88, padT = 18, padB = 14;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
-  const barW   = innerW / totalBars;
+  const barW   = innerW / visibleBars;
   const candleW = Math.max(barW * 0.62, 1.5);
-  const xBar = (i) => padL + (i + 0.5) * barW;
+
+  // xBar принимает глобальный индекс бара и возвращает X в SVG
+  const xBar = (i) => padL + (i - effectiveVisStart + 0.5) * barW;
   const yv   = (v) => padT + (1 - (v - lo) / (hi - lo)) * innerH;
 
   const gridLines = Array.from({ length: 6 }, (_, i) => {
@@ -170,25 +190,28 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   });
 
   const candles = history.map((bar, i) => {
+    if (i < effectiveVisStart || i >= visEnd) return null;
     const cx = xBar(i);
     const isUp = bar.close >= bar.open;
     const bodyTop = yv(Math.max(bar.open, bar.close));
     const bodyH   = Math.max(yv(Math.min(bar.open, bar.close)) - bodyTop, 1);
-    return { cx, bodyTop, bodyH, highY: yv(bar.high), lowY: yv(bar.low), isUp, bar };
-  });
+    return { cx, bodyTop, bodyH, highY: yv(bar.high), lowY: yv(bar.low), isUp, bar, i };
+  }).filter(Boolean);
 
   const forecastCandles = forecast.map((bar, i) => {
-    const cx = xBar(hN + i);
+    const gi = hN + i; // глобальный индекс
+    if (gi < effectiveVisStart || gi >= visEnd) return null;
+    const cx = xBar(gi);
     if (forecastHasOHLC) {
       const isUp    = bar.close >= bar.open;
       const bodyTop = yv(Math.max(bar.open, bar.close));
       const bodyH   = Math.max(yv(Math.min(bar.open, bar.close)) - bodyTop, 1.5);
-      return { cx, bodyTop, bodyH, highY: yv(bar.high), lowY: yv(bar.low), isUp, bar };
+      return { cx, bodyTop, bodyH, highY: yv(bar.high), lowY: yv(bar.low), isUp, bar, gi, i };
     }
-    return { cx, midY: yv(bar.mid), isUp: true, bar };
-  });
+    return { cx, midY: yv(bar.mid), isUp: true, bar, gi, i };
+  }).filter(Boolean);
 
-  const nowX = xBar(nowIdx);
+  const nowX = nowIdx >= effectiveVisStart && nowIdx < visEnd ? xBar(nowIdx) : null;
   const levelLines = hasTrade ? [
     { k: "Вход", v: levels.entry,       c: "var(--text)"  },
     { k: "Стоп", v: levels.stop_loss,   c: "var(--short)" },
@@ -197,28 +220,82 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
   const filename = `${symbol}_${interval}_forecast.jpg`;
 
-  // ── Hover-обработчик ────────────────────────────────────────────────────────
-  function onSvgMouseMove(e) {
+  // ── Zoom/Pan handlers ────────────────────────────────────────────────────
+  function svgXToBarIdx(clientX) {
     const svg = svgRef.current;
-    if (!svg) return;
+    if (!svg) return null;
     const rect = svg.getBoundingClientRect();
-    const svgX = ((e.clientX - rect.left) / rect.width) * W;
-    const idx  = Math.floor((svgX - padL) / barW);
-    if (idx < 0 || idx >= totalBars) { setHover(null); return; }
+    const svgX = ((clientX - rect.left) / rect.width) * W;
+    return Math.floor((svgX - padL) / barW) + effectiveVisStart;
+  }
+
+  function onWheel(e) {
+    e.preventDefault();
+    const idx = svgXToBarIdx(e.clientX);
+    const currentCount = effectiveVisCount;
+    const factor = e.deltaY > 0 ? 1.15 : 0.87; // zoom out / in
+    const newCount = Math.round(Math.min(totalBars, Math.max(5, currentCount * factor)));
+    // сохраняем бар под курсором на месте
+    const cursorFrac = idx != null ? (idx - effectiveVisStart) / currentCount : 0.5;
+    const newStart = Math.round((idx ?? effectiveVisStart) - cursorFrac * newCount);
+    setVisCount(newCount);
+    setVisStart(Math.max(0, Math.min(newStart, totalBars - newCount)));
+    setHover(null);
+  }
+
+  function onMouseDown(e) {
+    if (e.button !== 0) return;
+    dragRef.current = { startX: e.clientX, startVisStart: effectiveVisStart };
+    e.currentTarget.style.cursor = "grabbing";
+  }
+
+  function onMouseMove(e) {
+    // drag
+    if (dragRef.current) {
+      const svg = svgRef.current;
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const dxPx = e.clientX - dragRef.current.startX;
+      const dxBars = Math.round(-dxPx / (rect.width / W) / barW);
+      const newStart = Math.max(0, Math.min(dragRef.current.startVisStart + dxBars, totalBars - effectiveVisCount));
+      setVisStart(newStart);
+      setHover(null);
+      return;
+    }
+    // hover
+    const idx = svgXToBarIdx(e.clientX);
+    if (idx == null || idx < 0 || idx >= totalBars) { setHover(null); return; }
     const isForecast = idx >= hN;
     const bar = isForecast ? forecast[idx - hN] : history[idx];
     if (!bar) { setHover(null); return; }
     const cx = xBar(idx);
-    const mainPrice = bar.close ?? bar.mid ?? bar.close;
+    const mainPrice = bar.close ?? bar.mid;
     setHover({ idx, cx, cy: yv(mainPrice), bar, isForecast });
   }
 
-  // прогнозные цены-пилюли
+  function onMouseUp(e) {
+    dragRef.current = null;
+    if (svgRef.current) svgRef.current.style.cursor = "crosshair";
+  }
+
+  function resetZoom() {
+    setVisStart(0);
+    setVisCount(totalBars);
+  }
+
+  // attach wheel with passive:false для предотвращения скролла страницы
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  });
+
+  // прогнозные цены
   const forecastPrices = forecast.map(b => b.close ?? b.mid);
   const firstClose = forecastPrices[0];
   const lastClose  = forecastPrices[forecastPrices.length - 1];
 
-  // risk/reward/prob
   const prob    = levels?.prob_up ?? data.signal?.prob_up;
   const conf    = levels?.confidence ?? data.signal?.confidence;
   const rr      = levels?.risk_reward ?? data.signal?.risk_reward;
@@ -228,11 +305,13 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   const rewPct  = hasTrade && levels?.entry && levels?.take_profit
     ? Math.abs(levels.take_profit - levels.entry) / levels.entry : null;
 
+  const isZoomed = effectiveVisCount < totalBars;
+
   return (
     <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
       {/* ── Левая колонка: граф ───────────────────────────────────── */}
       <div style={{ flex: "1 1 520px", minWidth: 0 }}>
-        {/* Заголовок графика */}
+        {/* Заголовок */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
           <span style={{ fontFamily: "var(--mono)", fontWeight: 700, fontSize: 15, color: "var(--text)" }}>
             {symbol}
@@ -251,6 +330,14 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             </span>
           )}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            {isZoomed && (
+              <button onClick={resetZoom} title="Сбросить масштаб"
+                style={{ background: "none", border: "1px solid var(--primary)", borderRadius: 6,
+                         color: "var(--primary)", cursor: "pointer", padding: "2px 9px",
+                         fontSize: 11, fontFamily: "var(--mono)", lineHeight: 1.5 }}>
+                ⟳ сброс
+              </button>
+            )}
             {(pl || hasIndicators) && (
               <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
                               fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)", userSelect: "none" }}>
@@ -271,11 +358,19 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           </div>
         </div>
 
+        {/* Подсказка управления */}
+        <div style={{ fontSize: 10, color: "var(--muted-2)", fontFamily: "var(--mono)", marginBottom: 4, opacity: 0.6 }}>
+          колесо — масштаб · drag — сдвиг
+        </div>
+
         {/* SVG Graph */}
         <div style={{ position: "relative" }}>
           <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
-               style={{ display: "block", width: "100%", cursor: "crosshair" }}
-               onMouseMove={onSvgMouseMove} onMouseLeave={() => setHover(null)}>
+               style={{ display: "block", width: "100%", cursor: "crosshair", userSelect: "none" }}
+               onMouseMove={onMouseMove}
+               onMouseDown={onMouseDown}
+               onMouseUp={onMouseUp}
+               onMouseLeave={() => { dragRef.current = null; setHover(null); }}>
             <defs>
               <clipPath id="plot-fc">
                 <rect x={padL} y={padT} width={innerW} height={innerH} />
@@ -290,9 +385,11 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
             <g clipPath="url(#plot-fc)">
               {/* фон зоны прогноза */}
-              <rect x={xBar(nowIdx + 0.5)} y={padT}
-                    width={padL + innerW - xBar(nowIdx + 0.5)} height={innerH}
-                    fill={accentColor} opacity="0.05" />
+              {nowX != null && (
+                <rect x={nowX} y={padT}
+                      width={padL + innerW - nowX} height={innerH}
+                      fill={accentColor} opacity="0.05" />
+              )}
 
               {/* Pivot Points */}
               {showIndicators && pivotLines.map(l => (
@@ -303,7 +400,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
               {/* Индикаторы — линии на ценовом графике */}
               {showIndicators && hasIndicators && (<>
-                {/* Bollinger Bands — полупрозрачная заливка */}
                 {bbUPts.length > 1 && bbLPts.length > 1 && (
                   <path
                     d={`${polyline(bbUPts, xBar, yv)} L${xBar(bbLPts[bbLPts.length-1].x).toFixed(1)},${yv(bbLPts[bbLPts.length-1].v).toFixed(1)} ${[...bbLPts].reverse().map((p,i)=>`${i===0?"":"L"}${xBar(p.x).toFixed(1)},${yv(p.v).toFixed(1)}`).join(" ")} Z`}
@@ -312,21 +408,19 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                 {bbUPts.length > 1 && <path d={polyline(bbUPts, xBar, yv)} fill="none" stroke="#6366f1" strokeWidth="0.8" opacity="0.45" strokeDasharray="3 3" />}
                 {bbMPts.length > 1 && <path d={polyline(bbMPts, xBar, yv)} fill="none" stroke="#6366f1" strokeWidth="0.7" opacity="0.35" strokeDasharray="2 4" />}
                 {bbLPts.length > 1 && <path d={polyline(bbLPts, xBar, yv)} fill="none" stroke="#6366f1" strokeWidth="0.8" opacity="0.45" strokeDasharray="3 3" />}
-                {/* SMA */}
                 {sma10Pts.length > 1 && <path d={polyline(sma10Pts, xBar, yv)} fill="none" stroke="#f59e0b" strokeWidth="1.1" opacity="0.75" />}
                 {sma20Pts.length > 1 && <path d={polyline(sma20Pts, xBar, yv)} fill="none" stroke="#10b981" strokeWidth="1.1" opacity="0.75" />}
                 {sma50Pts.length > 1 && <path d={polyline(sma50Pts, xBar, yv)} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.65" />}
-                {/* EMA */}
                 {ema12Pts.length > 1 && <path d={polyline(ema12Pts, xBar, yv)} fill="none" stroke="#f59e0b" strokeWidth="0.7" opacity="0.45" strokeDasharray="4 2" />}
                 {ema26Pts.length > 1 && <path d={polyline(ema26Pts, xBar, yv)} fill="none" stroke="#10b981" strokeWidth="0.7" opacity="0.45" strokeDasharray="4 2" />}
               </>)}
 
               {/* Исторические свечи */}
-              {candles.map((c, i) => {
-                const isHov = hover?.idx === i;
+              {candles.map((c) => {
+                const isHov = hover?.idx === c.i;
                 const col = c.isUp ? "var(--long)" : "var(--short)";
                 return (
-                  <g key={i} opacity={isHov ? 1 : 0.85}>
+                  <g key={c.i} opacity={isHov ? 1 : 0.85}>
                     <line x1={c.cx} y1={c.highY} x2={c.cx} y2={c.lowY}
                           stroke={col} strokeWidth="1" />
                     <rect x={c.cx - candleW / 2} y={c.bodyTop}
@@ -339,11 +433,11 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
               {/* Прогнозные свечи */}
               {forecastHasOHLC
-                ? forecastCandles.map((c, i) => {
-                    const isHov = hover?.idx === hN + i;
+                ? forecastCandles.map((c) => {
+                    const isHov = hover?.idx === c.gi;
                     const col = c.isUp ? "var(--long)" : "var(--short)";
                     return (
-                      <g key={i} opacity={isHov ? 0.9 : 0.55}>
+                      <g key={c.gi} opacity={isHov ? 0.9 : 0.55}>
                         <line x1={c.cx} y1={c.highY} x2={c.cx} y2={c.bodyTop}
                               stroke={col} strokeWidth="1" />
                         <line x1={c.cx} y1={c.bodyTop + c.bodyH} x2={c.cx} y2={c.lowY}
@@ -352,30 +446,34 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                               width={candleW} height={c.bodyH}
                               fill={col}
                               stroke={isHov ? "var(--text)" : col} strokeWidth={isHov ? 1 : 0.5} />
-                        {/* номер прогнозной свечи */}
                         <text x={c.cx} y={padT - 4} fill="var(--muted-2)"
                               fontSize="7" fontFamily="var(--mono)" textAnchor="middle">
-                          {i + 1}
+                          {c.i + 1}
                         </text>
                       </g>
                     );
                   })
-                : forecast.map((p, i) => (
-                    <circle key={i} cx={xBar(hN + i)} cy={yv(p.mid)} r="2.5"
-                            fill={accentColor} opacity="0.7" />
-                  ))
+                : forecast.map((p, i) => {
+                    const gi = hN + i;
+                    if (gi < effectiveVisStart || gi >= visEnd) return null;
+                    return (
+                      <circle key={i} cx={xBar(gi)} cy={yv(p.mid)} r="2.5"
+                              fill={accentColor} opacity="0.7" />
+                    );
+                  })
               }
 
               {/* Реальные свечи за период прогноза */}
               {actualBars.map((bar, i) => {
-                const cx       = xBar(hN + i);
+                const gi = hN + i;
+                if (gi < effectiveVisStart || gi >= visEnd) return null;
+                const cx       = xBar(gi);
                 const isUp     = bar.close >= bar.open;
                 const col      = isUp ? "var(--long)" : "var(--short)";
                 const bodyTop  = yv(Math.max(bar.open, bar.close));
                 const bodyH    = Math.max(yv(Math.min(bar.open, bar.close)) - bodyTop, 1.5);
                 return (
                   <g key={`act-${i}`} opacity="0.92">
-                    {/* тень от прогноза — тонкая белая обводка */}
                     <rect x={cx - candleW / 2 - 1} y={bodyTop - 1}
                           width={candleW + 2} height={bodyH + 2}
                           fill="var(--panel)" rx="0.5" opacity="0.55" />
@@ -392,8 +490,10 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
               {/* Уровни сделки */}
               {levelLines.map((l, i) => (
-                <line key={i} x1={nowX} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
-                      stroke={l.c} strokeWidth="0.9" strokeDasharray="3 5" opacity="0.85" />
+                nowX != null && (
+                  <line key={i} x1={nowX} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
+                        stroke={l.c} strokeWidth="0.9" strokeDasharray="3 5" opacity="0.85" />
+                )
               ))}
 
               {/* Вертикаль hover */}
@@ -404,8 +504,10 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             </g>
 
             {/* Вертикаль «сейчас» */}
-            <line x1={nowX} y1={padT} x2={nowX} y2={padT + innerH}
-                  stroke="var(--line)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+            {nowX != null && (
+              <line x1={nowX} y1={padT} x2={nowX} y2={padT + innerH}
+                    stroke="var(--line)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
+            )}
 
             {/* Подписи уровней сделки справа */}
             {levelLines.map((l, i) => (
@@ -420,7 +522,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               </text>
             ))}
 
-            {/* Hover tooltip внутри SVG */}
+            {/* Hover tooltip */}
             {hover && (() => {
               const b = hover.bar;
               const lines = hover.isForecast
@@ -462,63 +564,62 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           const PW = 800, pH = 180, pPadL = 8, pPadR = 88, pPadT = 8, pPadB = 10;
           const pInnerW = PW - pPadL - pPadR;
           const pInnerH = pH - pPadT - pPadB;
-          const pxBar = (i) => pPadL + (i + 0.5) * (pInnerW / hN);
+          // mini-panels используют тот же видимый диапазон
+          const pxBar = (i) => pPadL + (i - effectiveVisStart + 0.5) * (pInnerW / visibleBars);
 
-          // RSI panel
           const rsiMin = 0, rsiMax = 100;
           const ry = (v) => pPadT + (1 - (v - rsiMin) / (rsiMax - rsiMin)) * pInnerH;
-          const rsiPath = rsiPts.length > 1
-            ? rsiPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${ry(p.v).toFixed(1)}`).join(" ")
+          const visRsiPts = rsiPts.filter(p => p.x >= effectiveVisStart && p.x < visEnd);
+          const rsiPath = visRsiPts.length > 1
+            ? visRsiPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${ry(p.v).toFixed(1)}`).join(" ")
             : "";
 
-          // MACD panel
-          const macdVals = [...macdPts.map(p => p.v), ...macdSPts.map(p => p.v), ...macdHPts.map(p => p.v)];
+          const visMacdPts  = macdPts.filter(p => p.x >= effectiveVisStart && p.x < visEnd);
+          const visMacdSPts = macdSPts.filter(p => p.x >= effectiveVisStart && p.x < visEnd);
+          const visMacdHPts = macdHPts.filter(p => p.x >= effectiveVisStart && p.x < visEnd);
+          const macdVals = [...visMacdPts.map(p => p.v), ...visMacdSPts.map(p => p.v), ...visMacdHPts.map(p => p.v)];
           const macdMin = macdVals.length ? Math.min(...macdVals) : -1;
           const macdMax = macdVals.length ? Math.max(...macdVals) :  1;
           const mRange = (macdMax - macdMin) || 0.001;
           const my = (v) => pPadT + (1 - (v - macdMin) / mRange) * pInnerH;
           const my0 = my(Math.max(macdMin, Math.min(macdMax, 0)));
-          const macdPath = macdPts.length > 1
-            ? macdPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${my(p.v).toFixed(1)}`).join(" ")
+          const macdPath = visMacdPts.length > 1
+            ? visMacdPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${my(p.v).toFixed(1)}`).join(" ")
             : "";
-          const macdSPath = macdSPts.length > 1
-            ? macdSPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${my(p.v).toFixed(1)}`).join(" ")
+          const macdSPath = visMacdSPts.length > 1
+            ? visMacdSPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${my(p.v).toFixed(1)}`).join(" ")
             : "";
 
           return (
             <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-              {/* RSI */}
-              {rsiPts.length > 1 && (
+              {visRsiPts.length > 1 && (
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 9, color: "var(--muted-2)", fontFamily: "var(--mono)", marginBottom: 2 }}>RSI(14)</div>
                   <svg viewBox={`0 0 ${PW} ${pH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", width: "100%" }}>
                     <rect x={pPadL} y={pPadT} width={pInnerW} height={pInnerH} fill="none" stroke="var(--line)" strokeWidth="0.5" opacity="0.4" />
-                    {/* зоны */}
                     <line x1={pPadL} y1={ry(70)} x2={pPadL+pInnerW} y2={ry(70)} stroke="#ef4444" strokeWidth="0.6" strokeDasharray="3 3" opacity="0.5" />
                     <line x1={pPadL} y1={ry(50)} x2={pPadL+pInnerW} y2={ry(50)} stroke="var(--muted-2)" strokeWidth="0.5" strokeDasharray="2 4" opacity="0.4" />
                     <line x1={pPadL} y1={ry(30)} x2={pPadL+pInnerW} y2={ry(30)} stroke="#10b981" strokeWidth="0.6" strokeDasharray="3 3" opacity="0.5" />
                     {rsiPath && <path d={rsiPath} fill="none" stroke="#a78bfa" strokeWidth="1.2" />}
                     <text x={pPadL+pInnerW+4} y={ry(70)+3} fill="#ef4444" fontSize="7" fontFamily="var(--mono)">70</text>
                     <text x={pPadL+pInnerW+4} y={ry(30)+3} fill="#10b981" fontSize="7" fontFamily="var(--mono)">30</text>
-                    {rsiPts.length > 0 && (
+                    {visRsiPts.length > 0 && (
                       <text x={pPadL+pInnerW+4} y={pPadT+pInnerH/2+3} fill="#a78bfa" fontSize="7" fontFamily="var(--mono)">
-                        {rsiPts[rsiPts.length-1].v.toFixed(0)}
+                        {visRsiPts[visRsiPts.length-1].v.toFixed(0)}
                       </text>
                     )}
                   </svg>
                 </div>
               )}
-              {/* MACD */}
-              {macdPts.length > 1 && (
+              {visMacdPts.length > 1 && (
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 9, color: "var(--muted-2)", fontFamily: "var(--mono)", marginBottom: 2 }}>MACD(12,26,9)</div>
                   <svg viewBox={`0 0 ${PW} ${pH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", width: "100%" }}>
                     <rect x={pPadL} y={pPadT} width={pInnerW} height={pInnerH} fill="none" stroke="var(--line)" strokeWidth="0.5" opacity="0.4" />
                     <line x1={pPadL} y1={my0} x2={pPadL+pInnerW} y2={my0} stroke="var(--muted-2)" strokeWidth="0.6" opacity="0.4" />
-                    {/* гистограмма */}
-                    {macdHPts.map((p, i) => {
+                    {visMacdHPts.map((p, i) => {
                       const bx = pxBar(p.x);
-                      const bw = Math.max((pInnerW / hN) * 0.6, 1);
+                      const bw = Math.max((pInnerW / visibleBars) * 0.6, 1);
                       const top = Math.min(my0, my(p.v));
                       const ht  = Math.abs(my0 - my(p.v)) || 1;
                       return <rect key={i} x={bx - bw/2} y={top} width={bw} height={ht}
@@ -569,7 +670,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           border: "1px solid var(--line)", borderRadius: 12, overflow: "hidden",
           background: "var(--panel)",
         }}>
-          {/* Заголовок */}
           <div style={{
             padding: "12px 14px 10px",
             borderBottom: "1px solid var(--line)",
@@ -587,7 +687,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             </span>
           </div>
 
-          {/* Уровни */}
           {[
             { label: "Вход", value: levels.entry, color: "var(--text)" },
             { label: "Тейк-профит", value: levels.take_profit, color: "var(--long)", bg: "rgba(16,185,129,.07)" },
@@ -605,7 +704,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             </div>
           ))}
 
-          {/* Вероятность */}
           {prob != null && (
             <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-soft)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
@@ -627,7 +725,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             </div>
           )}
 
-          {/* Риск-метрики */}
           <div style={{ padding: "10px 14px" }}>
             <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, fontWeight: 600 }}>Риск-метрики</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
