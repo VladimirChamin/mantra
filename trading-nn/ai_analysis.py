@@ -451,7 +451,7 @@ def fetch_onchain(symbol: str) -> Optional[dict]:
 
 # ─── 5. Фундаментал: РФ акции через T-Invest ─────────────────────────────────
 
-_TINVEST_BASE = "https://invest-public-api.tinkoff.ru/rest"
+_TINVEST_BASE = "https://invest-public-api.tbank.ru/rest"
 _TINVEST_TOKEN = os.environ.get("TINVEST_TOKEN", "")
 
 # Известные тикеры MOEX → uid (кэш чтобы не делать поиск при каждом вызове)

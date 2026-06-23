@@ -35,7 +35,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # T-Invest REST API v2
 # ---------------------------------------------------------------------------
-_BASE            = "https://invest-public-api.tinkoff.ru/rest"
+_BASE            = "https://invest-public-api.tbank.ru/rest"
 _INSTRUMENTS_URL = f"{_BASE}/tinkoff.public.invest.api.contract.v1.InstrumentsService"
 _MARKET_URL      = f"{_BASE}/tinkoff.public.invest.api.contract.v1.MarketDataService"
 
