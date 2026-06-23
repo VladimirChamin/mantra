@@ -156,7 +156,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   const pad = (hi - lo) * 0.08 || hi * 0.02 || 1;
   lo -= pad; hi += pad;
 
-  const W = 800, H = 320, padL = 8, padR = 10, padT = 18, padB = 14;
+  const W = 800, H = 320, padL = 8, padR = 88, padT = 18, padB = 14;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
   const barW   = innerW / totalBars;
@@ -407,6 +407,18 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             <line x1={nowX} y1={padT} x2={nowX} y2={padT + innerH}
                   stroke="var(--line)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
 
+            {/* Подписи уровней сделки справа */}
+            {levelLines.map((l, i) => (
+              <text key={i} x={padL + innerW + 4} y={yv(l.v) + 3.5} fill={l.c}
+                    fontSize="9" fontFamily="var(--mono)">{l.k} {fmtN(l.v)}</text>
+            ))}
+            {/* Подписи пивотов справа */}
+            {showIndicators && pivotLines.map(l => (
+              <text key={l.k} x={padL + innerW + 4} y={yv(l.v) + 3.5}
+                    fill={l.c} fontSize="8" fontFamily="var(--mono)" opacity="0.8">
+                {l.k} {fmtN(l.v)}
+              </text>
+            ))}
 
             {/* Hover tooltip внутри SVG */}
             {hover && (() => {
