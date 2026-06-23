@@ -883,8 +883,9 @@ def _call_deepseek(prompt: str) -> dict:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user",   "content": prompt},
         ],
-        "temperature": 0.3,
-        "max_tokens": 1500,
+        "temperature": 1,
+        "max_tokens": 8000,
+        "reasoning_effort": "low",
         "response_format": {"type": "json_object"},
     }
     headers = {
