@@ -1812,6 +1812,13 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
 
     total_move = _tp_price - price0
 
+    # Уровни пивота между стартом и целью — именно они будут магнитами
+    _pv_lo = min(price0, _tp_price)
+    _pv_hi = max(price0, _tp_price)
+    # Расширяем зону чуть за пределы маршрута чтобы захватить ближайшие уровни
+    _pv_margin = abs(total_move) * 0.25
+    _magnets = [v for v in _pivot_vals if _pv_lo - _pv_margin <= v <= _pv_hi + _pv_margin]
+
     # Строим профиль накопленного движения по барам:
     # Фаза 1 (первые ~30%): консолидация / пологий дрейф ±15% от общего хода
     # Фаза 2 (середина ~40%): импульс — основная часть хода (~70%)
@@ -1869,6 +1876,18 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         pull = 0.20 if in_impulse else (0.35 if in_consolidation else 0.55)
         bar_close = raw_close * (1 - pull) + mid * pull
 
+        # ── Притяжение к уровням пивота / S&R ───────────────────────────────
+        # Ищем ближайший магнит в пределах 0.6 ATR от текущего close
+        if _magnets:
+            nearest = min(_magnets, key=lambda v: abs(v - bar_close))
+            dist = abs(nearest - bar_close)
+            attract_radius = _atr_bar * 0.6
+            if dist < attract_radius and t < steps:
+                # Сила притяжения: максимальна у самого уровня, затухает к краю радиуса
+                # "неявная" — не более 35% смещения чтобы не было заметно механически
+                strength = 0.35 * (1.0 - dist / attract_radius) ** 1.5
+                bar_close = bar_close + (nearest - bar_close) * strength
+
         # Последняя свеча точно закрывается у TP
         if t == steps:
             bar_close = _tp_price
@@ -1886,6 +1905,15 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
 
         bar_high = max(bar_open, bar_close) + wick_top
         bar_low  = min(bar_open, bar_close) - wick_bot
+
+        # Фитили касаются ближайшего уровня если он в пределах 1.2 ATR от тела
+        if _magnets and t < steps:
+            nearest_h = min(_magnets, key=lambda v: abs(v - bar_high))
+            nearest_l = min(_magnets, key=lambda v: abs(v - bar_low))
+            if abs(nearest_h - bar_high) < _atr_bar * 1.2:
+                bar_high = max(bar_high, nearest_h) if nearest_h > bar_high else bar_high
+            if abs(nearest_l - bar_low) < _atr_bar * 1.2:
+                bar_low = min(bar_low, nearest_l) if nearest_l < bar_low else bar_low
 
         # Последняя свеча: фитиль касается TP
         if t == steps:
