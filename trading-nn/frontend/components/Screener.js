@@ -60,7 +60,7 @@ export default function Screener({ onScanDone }) {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       try {
-        const data = await api.forecast({ symbol: item.symbol, interval, steps: 5, history: 50 });
+        const data = await api.forecast({ symbol: item.symbol, interval, steps: 10, history: 50 });
         if (data?.signal) {
           newResults.push({
             ...data.signal,

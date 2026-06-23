@@ -459,7 +459,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
         {/* ── Мини-панели индикаторов ── */}
         {showIndicators && hasIndicators && (() => {
-          const PW = 800, pH = 60, pPadL = 8, pPadR = 88, pPadT = 8, pPadB = 10;
+          const PW = 800, pH = 180, pPadL = 8, pPadR = 88, pPadT = 8, pPadB = 10;
           const pInnerW = PW - pPadL - pPadR;
           const pInnerH = pH - pPadT - pPadB;
           const pxBar = (i) => pPadL + (i + 0.5) * (pInnerW / hN);
