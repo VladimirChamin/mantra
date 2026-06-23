@@ -1134,7 +1134,7 @@ export default function Dashboard() {
       `}</style>
 
       {tab === "screener" && (
-        <Screener />
+        <Screener onScanDone={() => api.mySignals().then(d => setSignals(d.signals || [])).catch(() => {})} />
       )}
 
       {tab === "subscriptions" && (

@@ -25,7 +25,7 @@ const CLASSES = ["all", "crypto", "stocks", "commodity", "forex", "bonds"];
 
 const DIR_COLOR = { LONG: "var(--long)", SHORT: "var(--short)", FLAT: "var(--muted)" };
 
-export default function Screener() {
+export default function Screener({ onScanDone }) {
   const [interval, setInterval] = useState("1d");
   const [minProb, setMinProb] = useState(55);
   const [dirFilter, setDirFilter] = useState("all");
@@ -80,7 +80,8 @@ export default function Screener() {
     setErrors(newErrors);
     setScanning(false);
     setDone(true);
-  }, [interval, classFilter]);
+    onScanDone?.();
+  }, [interval, classFilter, onScanDone]);
 
   function toggleSort(col) {
     if (sortBy === col) setSortDir(d => -d);
@@ -117,7 +118,6 @@ export default function Screener() {
             <select value={interval} onChange={e => setInterval(e.target.value)}>
               <option value="1d">1D — дневной</option>
               <option value="4h">4H — четырёхчасовой</option>
-              <option value="1h">1H — часовой</option>
             </select>
           </div>
           <div className="field">

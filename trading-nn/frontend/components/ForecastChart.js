@@ -211,15 +211,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           <span style={{ fontSize: 12, color: "var(--muted-2)", fontFamily: "var(--mono)" }}>
             {interval}
           </span>
-          {status && (
-            <span style={{
-              fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20,
-              border: `1.5px solid ${statusColor}`, color: statusColor,
-              background: `color-mix(in srgb, ${statusColor} 10%, transparent)`,
-            }}>
-              {statusLabel}
-            </span>
-          )}
           {actualBars.length > 0 && (
             <span style={{
               fontSize: 11, padding: "2px 9px", borderRadius: 20,
@@ -419,48 +410,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             })()}
           </svg>
         </div>
-
-        {/* ── Прогнозные цены-пилюли ──────────────────────────────────── */}
-        {forecastHasOHLC && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6, fontFamily: "var(--mono)" }}>
-              AI прогноз цен ({fN} свечей)
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {forecast.map((bar, i) => {
-                const price  = bar.close ?? bar.mid;
-                const prev   = i === 0 ? last_price : (forecast[i - 1].close ?? forecast[i - 1].mid);
-                const isUp   = price >= prev;
-                return (
-                  <div key={i} style={{
-                    fontFamily: "var(--mono)", fontSize: 11, padding: "4px 9px",
-                    borderRadius: 8, fontWeight: 600,
-                    background: isUp ? "rgba(16,185,129,.1)" : "rgba(239,68,68,.1)",
-                    color: isUp ? "var(--long)" : "var(--short)",
-                    border: `1px solid ${isUp ? "rgba(16,185,129,.3)" : "rgba(239,68,68,.3)"}`,
-                    cursor: "default", whiteSpace: "nowrap",
-                    boxShadow: hover?.idx === hN + i ? "0 0 0 2px var(--primary)" : "none",
-                  }}
-                    onMouseEnter={() => setHover({ idx: hN + i, cx: xBar(hN + i), bar, isForecast: true })}
-                    onMouseLeave={() => setHover(null)}
-                  >
-                    {i + 1}. {fmtN(price)}
-                  </div>
-                );
-              })}
-            </div>
-            {/* итоговое движение */}
-            {firstClose != null && lastClose != null && (
-              <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", fontFamily: "var(--mono)" }}>
-                Ожидаемое движение за {fN} свечей:{" "}
-                <span style={{ fontWeight: 700, color: lastClose >= firstClose ? "var(--long)" : "var(--short)" }}>
-                  {lastClose >= firstClose ? "+" : ""}{fmtN((lastClose - last_price) / last_price * 100)}%
-                </span>
-                {" "}({fmtN(last_price)} → {fmtN(lastClose)})
-              </div>
-            )}
-          </div>
-        )}
 
         {/* OOS AUC */}
         {oos_auc != null && (
