@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 # ─── конфигурация из окружения ────────────────────────────────────────────────
 DEEPSEEK_API_KEY   = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE      = "https://api.deepseek.com"
-DEEPSEEK_MODEL     = "deepseek-chat"
+DEEPSEEK_MODEL     = "deepseek-v4-pro"
 
 GOOGLE_API_KEY     = os.environ.get("GOOGLE_API_KEY", "")
 GOOGLE_CX          = os.environ.get("GOOGLE_CX", "")        # Custom Search Engine ID
@@ -449,7 +449,230 @@ def fetch_onchain(symbol: str) -> Optional[dict]:
     return result if len(result) > 2 else None
 
 
-# ─── 4. DeepSeek синтез ───────────────────────────────────────────────────────
+# ─── 5. Фундаментал: РФ акции через T-Invest ─────────────────────────────────
+
+_TINVEST_BASE = "https://invest-public-api.tinkoff.ru/rest"
+_TINVEST_TOKEN = os.environ.get("TINVEST_TOKEN", "")
+
+# Известные тикеры MOEX → uid (кэш чтобы не делать поиск при каждом вызове)
+_TINVEST_UID_CACHE: dict[str, str] = {}
+
+_RU_STOCKS = {
+    "SBER", "GAZP", "LKOH", "NVTK", "YDEX", "GMKN", "ROSN", "TATN",
+    "MGNT", "VTBR", "ALRS", "POLY", "CHMF", "NLMK", "MTSS", "AFLT",
+    "IRAO", "MOEX", "TCSG", "RUAL", "PIKK", "OZON", "VKCO", "SNGS",
+}
+
+
+def _is_ru_stock(symbol: str) -> bool:
+    return symbol.upper() in _RU_STOCKS
+
+
+def _tinvest_find_uid(symbol: str) -> Optional[str]:
+    if not _TINVEST_TOKEN:
+        return None
+    sym = symbol.upper()
+    if sym in _TINVEST_UID_CACHE:
+        return _TINVEST_UID_CACHE[sym]
+    try:
+        r = httpx.post(
+            f"{_TINVEST_BASE}/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument",
+            headers={"Authorization": f"Bearer {_TINVEST_TOKEN}", "Content-Type": "application/json"},
+            json={"query": sym, "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED", "apiTradeAvailableFlag": False},
+            timeout=FETCH_TIMEOUT,
+        )
+        items = r.json().get("instruments", [])
+        best = next((x for x in items if x.get("ticker", "").upper() == sym and x.get("classCode") == "TQBR"), None)
+        if not best and items:
+            best = items[0]
+        uid = best.get("uid") if best else None
+        if uid:
+            _TINVEST_UID_CACHE[sym] = uid
+        return uid
+    except Exception as e:
+        log.debug("T-Invest FindInstrument error: %s", e)
+        return None
+
+
+def fetch_ru_fundamentals(symbol: str) -> Optional[dict]:
+    """
+    Фундаментальные данные по акции РФ через T-Invest GetFundamentals.
+    Возвращает словарь с ключевыми мультипликаторами или None.
+    """
+    if not _TINVEST_TOKEN:
+        log.debug("TINVEST_TOKEN не задан — фундаментал РФ недоступен")
+        return None
+    uid = _tinvest_find_uid(symbol)
+    if not uid:
+        return None
+    try:
+        r = httpx.post(
+            f"{_TINVEST_BASE}/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetFundamentals",
+            headers={"Authorization": f"Bearer {_TINVEST_TOKEN}", "Content-Type": "application/json"},
+            json={"assets": [uid]},
+            timeout=FETCH_TIMEOUT,
+        )
+        r.raise_for_status()
+        items = r.json().get("fundamentals", [])
+        if not items:
+            return None
+        f = items[0]
+
+        def _f(x):
+            try: return round(float(x), 4) if x is not None else None
+            except: return None
+
+        return {
+            "currency":         f.get("currency"),
+            "market_cap":       _f(f.get("marketCapitalization")),
+            "ev":               _f(f.get("enterpriseValue")),
+            "pe":               _f(f.get("peRatioTtm")),
+            "pb":               _f(f.get("priceToBook")),
+            "ps":               _f(f.get("priceToSales")),
+            "ev_ebitda":        _f(f.get("evToEbitda")),
+            "debt_equity":      _f(f.get("totalDebtToEquity")),
+            "current_ratio":    _f(f.get("currentRatio")),
+            "revenue":          _f(f.get("totalRevenueTtm")),
+            "net_income":       _f(f.get("netIncomeTtm")),
+            "ebitda":           _f(f.get("ebitdaTtm")),
+            "roe":              _f(f.get("roe")),
+            "roa":              _f(f.get("roa")),
+            "net_margin":       _f(f.get("netMargin")),
+            "revenue_growth":   _f(f.get("revenueGrowth5Y")),
+            "eps_growth":       _f(f.get("epsGrowth5Y")),
+            "dividend_yield":   _f(f.get("dividendYieldDailyTtm")),
+            "payout_ratio":     _f(f.get("dividendPayout")),
+            "beta":             _f(f.get("beta")),
+            "week52_high":      _f(f.get("week52HighPrice")),
+            "week52_low":       _f(f.get("week52LowPrice")),
+            "free_cash_flow":   _f(f.get("freeCashFlowTtm")),
+        }
+    except Exception as e:
+        log.warning("T-Invest GetFundamentals error: %s", e)
+        return None
+
+
+# ─── 6. Фундаментал: США акции через yfinance ─────────────────────────────────
+
+# Тикеры американских акций (простая эвристика: нет числовых символов, нет USDT/USD)
+def _is_us_stock(symbol: str) -> bool:
+    sym = symbol.upper()
+    if sym in _RU_STOCKS:
+        return False
+    if any(x in sym for x in ("USDT", "USD", "EUR", "GBP", "JPY", "XAU", "XAG")):
+        return False
+    if _COIN_MAP.get(sym):
+        return False
+    # Американские тикеры: 1-5 букв латиницы
+    import re as _re
+    return bool(_re.fullmatch(r"[A-Z]{1,5}", sym))
+
+
+def fetch_us_fundamentals(symbol: str) -> Optional[dict]:
+    """
+    Фундаментальные данные по акции США через yfinance (бесплатно, без ключа).
+    Возвращает словарь с мультипликаторами, P&L, балансом или None.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        log.debug("yfinance не установлен")
+        return None
+
+    try:
+        ticker = yf.Ticker(symbol.upper())
+        info = ticker.info or {}
+
+        def _v(key):
+            v = info.get(key)
+            try: return round(float(v), 4) if v is not None else None
+            except: return None
+
+        def _big(key):
+            v = info.get(key)
+            try: return int(v) if v is not None else None
+            except: return None
+
+        # Баланс: берём последний год
+        bs = ticker.balance_sheet
+        inc = ticker.income_stmt
+        cf = ticker.cash_flow
+
+        def _sheet_val(df, *rows):
+            if df is None or df.empty:
+                return None
+            for row in rows:
+                if row in df.index:
+                    v = df.loc[row].iloc[0]
+                    try: return int(v) if not (v != v) else None  # NaN check
+                    except: return None
+            return None
+
+        total_assets     = _sheet_val(bs, "Total Assets")
+        total_liab       = _sheet_val(bs, "Total Liabilities Net Minority Interest", "Total Liab")
+        equity           = _sheet_val(bs, "Stockholders Equity", "Total Stockholder Equity")
+        cash             = _sheet_val(bs, "Cash And Cash Equivalents", "Cash")
+        total_debt       = _sheet_val(bs, "Total Debt", "Long Term Debt")
+        revenue          = _sheet_val(inc, "Total Revenue")
+        gross_profit     = _sheet_val(inc, "Gross Profit")
+        operating_income = _sheet_val(inc, "Operating Income")
+        net_income       = _sheet_val(inc, "Net Income")
+        ebitda           = _sheet_val(inc, "EBITDA", "Normalized EBITDA")
+        free_cash_flow   = _sheet_val(cf, "Free Cash Flow")
+
+        return {
+            # Мультипликаторы
+            "pe":               _v("trailingPE"),
+            "forward_pe":       _v("forwardPE"),
+            "pb":               _v("priceToBook"),
+            "ps":               _v("priceToSalesTrailing12Months"),
+            "ev_ebitda":        _v("enterpriseToEbitda"),
+            "ev":               _big("enterpriseValue"),
+            "market_cap":       _big("marketCap"),
+            # Рентабельность
+            "roe":              _v("returnOnEquity"),
+            "roa":              _v("returnOnAssets"),
+            "gross_margin":     _v("grossMargins"),
+            "operating_margin": _v("operatingMargins"),
+            "net_margin":       _v("profitMargins"),
+            # Долг
+            "debt_equity":      _v("debtToEquity"),
+            "current_ratio":    _v("currentRatio"),
+            "quick_ratio":      _v("quickRatio"),
+            # Рост
+            "revenue_growth":   _v("revenueGrowth"),
+            "earnings_growth":  _v("earningsGrowth"),
+            # Дивиденды
+            "dividend_yield":   _v("dividendYield"),
+            "payout_ratio":     _v("payoutRatio"),
+            # Прочее
+            "beta":             _v("beta"),
+            "total_debt":       _big("totalDebt"),
+            "total_cash":       _big("totalCash"),
+            # Из отчётности
+            "revenue":          revenue,
+            "gross_profit":     gross_profit,
+            "operating_income": operating_income,
+            "net_income":       net_income,
+            "ebitda":           ebitda,
+            "free_cash_flow":   free_cash_flow,
+            "total_assets":     total_assets,
+            "total_liabilities": total_liab,
+            "equity":           equity,
+            "cash":             cash,
+            "total_debt_bs":    total_debt,
+            # Мета
+            "sector":       info.get("sector"),
+            "industry":     info.get("industry"),
+            "country":      info.get("country"),
+            "employees":    info.get("fullTimeEmployees"),
+        }
+    except Exception as e:
+        log.warning("yfinance fundamentals error for %s: %s", symbol, e)
+        return None
+
+
+# ─── 5. DeepSeek синтез ───────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """Ты — опытный финансовый аналитик. Твоя задача — дать краткий,
 структурированный фундаментальный анализ актива и сказать, подтверждает ли он
@@ -464,6 +687,19 @@ def _fmt_large(n) -> str:
     return str(n)
 
 
+def _fmt_pct(v) -> str:
+    if v is None: return "н/д"
+    return f"{v*100:.1f}%"
+
+def _fmt_big(n) -> str:
+    if n is None: return "н/д"
+    if abs(n) >= 1e12: return f"{n/1e12:.2f}T"
+    if abs(n) >= 1e9:  return f"{n/1e9:.2f}B"
+    if abs(n) >= 1e6:  return f"{n/1e6:.2f}M"
+    if abs(n) >= 1e3:  return f"{n/1e3:.1f}K"
+    return str(n)
+
+
 def _build_prompt(
     symbol: str,
     signal_direction: str,
@@ -472,11 +708,76 @@ def _build_prompt(
     cot: Optional[dict],
     fear_greed: Optional[dict],
     onchain: Optional[dict] = None,
+    fundamentals: Optional[dict] = None,
+    fundamentals_source: str = "",
 ) -> str:
     lines = [f"## Актив: {symbol}"]
     lines.append(f"## Сигнал нейросети: {signal_direction}"
                  + (f" (вход ≈ {signal_entry})" if signal_entry else ""))
     lines.append("")
+
+    # Фундаментальные данные
+    if fundamentals:
+        src = f" ({fundamentals_source})" if fundamentals_source else ""
+        lines.append(f"## Фундаментальный анализ{src}")
+        f = fundamentals
+        sector = f.get("sector") or f.get("industry")
+        if sector:
+            lines.append(f"- Сектор / отрасль: {sector}")
+        if f.get("market_cap"):
+            lines.append(f"- Рыночная капитализация: {_fmt_big(f['market_cap'])}")
+        if f.get("ev"):
+            lines.append(f"- Enterprise Value: {_fmt_big(f['ev'])}")
+        # Мультипликаторы
+        mults = []
+        if f.get("pe")       is not None: mults.append(f"P/E={f['pe']:.1f}")
+        if f.get("forward_pe") is not None: mults.append(f"P/E(fwd)={f['forward_pe']:.1f}")
+        if f.get("pb")       is not None: mults.append(f"P/B={f['pb']:.2f}")
+        if f.get("ps")       is not None: mults.append(f"P/S={f['ps']:.2f}")
+        if f.get("ev_ebitda") is not None: mults.append(f"EV/EBITDA={f['ev_ebitda']:.1f}")
+        if mults:
+            lines.append(f"- Мультипликаторы: {', '.join(mults)}")
+        # Рентабельность
+        rets = []
+        if f.get("roe")             is not None: rets.append(f"ROE={_fmt_pct(f['roe'])}")
+        if f.get("roa")             is not None: rets.append(f"ROA={_fmt_pct(f['roa'])}")
+        if f.get("net_margin")      is not None: rets.append(f"Чист.маржа={_fmt_pct(f['net_margin'])}")
+        if f.get("gross_margin")    is not None: rets.append(f"Валов.маржа={_fmt_pct(f['gross_margin'])}")
+        if f.get("operating_margin") is not None: rets.append(f"Опер.маржа={_fmt_pct(f['operating_margin'])}")
+        if rets:
+            lines.append(f"- Рентабельность: {', '.join(rets)}")
+        # Долг
+        debt = []
+        if f.get("debt_equity")   is not None: debt.append(f"D/E={f['debt_equity']:.2f}")
+        if f.get("current_ratio") is not None: debt.append(f"Current={f['current_ratio']:.2f}")
+        if f.get("quick_ratio")   is not None: debt.append(f"Quick={f['quick_ratio']:.2f}")
+        if debt:
+            lines.append(f"- Долговая нагрузка: {', '.join(debt)}")
+        # P&L
+        if f.get("revenue")        is not None: lines.append(f"- Выручка (TTM): {_fmt_big(f['revenue'])}")
+        if f.get("ebitda")         is not None: lines.append(f"- EBITDA: {_fmt_big(f['ebitda'])}")
+        if f.get("net_income")     is not None: lines.append(f"- Чистая прибыль: {_fmt_big(f['net_income'])}")
+        if f.get("free_cash_flow") is not None: lines.append(f"- Free Cash Flow: {_fmt_big(f['free_cash_flow'])}")
+        # Баланс
+        if f.get("total_assets")      is not None: lines.append(f"- Активы: {_fmt_big(f['total_assets'])}")
+        if f.get("total_liabilities") is not None: lines.append(f"- Обязательства: {_fmt_big(f['total_liabilities'])}")
+        if f.get("equity")            is not None: lines.append(f"- Собственный капитал: {_fmt_big(f['equity'])}")
+        if f.get("cash")              is not None: lines.append(f"- Денежные средства: {_fmt_big(f['cash'])}")
+        # Рост
+        grow = []
+        if f.get("revenue_growth")  is not None: grow.append(f"Выручка={_fmt_pct(f['revenue_growth'])}")
+        if f.get("earnings_growth") is not None: grow.append(f"EPS={_fmt_pct(f['earnings_growth'])}")
+        if f.get("eps_growth")      is not None: grow.append(f"EPS(5y)={_fmt_pct(f['eps_growth'])}")
+        if f.get("revenue_growth")  is not None and "5Y" in fundamentals_source: grow.append(f"Выручка(5y)={_fmt_pct(f['revenue_growth'])}")
+        if grow:
+            lines.append(f"- Рост: {', '.join(dict.fromkeys(grow))}")
+        # Дивиденды
+        if f.get("dividend_yield") is not None:
+            lines.append(f"- Дивидендная доходность: {_fmt_pct(f['dividend_yield'])}"
+                        + (f", payout={_fmt_pct(f['payout_ratio'])}" if f.get("payout_ratio") else ""))
+        if f.get("beta") is not None:
+            lines.append(f"- Beta: {f['beta']:.2f}")
+        lines.append("")
 
     # COT
     if cot:
@@ -550,13 +851,18 @@ def _build_prompt(
         '\n  "onchain_summary": "2-3 предложения: как on-chain данные (funding rate, LS ratio, активность сети) соотносятся с сигналом",'
         if onchain else ""
     )
+    fund_field = (
+        '\n  "fundamental_summary": "2-3 предложения: оценка мультипликаторов, рентабельности, долга и финансового здоровья компании",'
+        if fundamentals else ""
+    )
     lines.append(
         'Дай анализ строго в следующем формате JSON (только JSON, без лишнего текста):\n'
         '{\n'
         '  "verdict": "ПОДТВЕРЖДАЕТ" | "ПРОТИВОРЕЧИТ" | "НЕЙТРАЛЬНО",\n'
         '  "confidence": 1..5,\n'
-        '  "news_summary": "2-3 предложения о ключевых новостях",\n'
-        '  "cot_summary": "1-2 предложения о позиционировании (или null)",\n'
+        '  "news_summary": "2-3 предложения о ключевых новостях",'
+        + fund_field
+        + '\n  "cot_summary": "1-2 предложения о позиционировании (или null)",\n'
         '  "macro_summary": "1-2 предложения о макро/сентименте (или null)",'
         + onchain_field + '\n'
         '  "key_risks": ["риск 1", "риск 2", "риск 3"],\n'
@@ -642,14 +948,31 @@ def run_analysis(
         except Exception as e:
             errors.append(f"OnChain: {e}")
 
-    # 4. Новости
+    # 4. Фундаментальные данные (акции)
+    fundamentals = None
+    fundamentals_source = ""
+    if asset_class == "stocks":
+        if _is_ru_stock(symbol):
+            try:
+                fundamentals = fetch_ru_fundamentals(symbol)
+                fundamentals_source = "T-Invest"
+            except Exception as e:
+                errors.append(f"RU Fundamentals: {e}")
+        elif _is_us_stock(symbol):
+            try:
+                fundamentals = fetch_us_fundamentals(symbol)
+                fundamentals_source = "Yahoo Finance / yfinance"
+            except Exception as e:
+                errors.append(f"US Fundamentals: {e}")
+
+    # 5. Новости
     news_items = []
     try:
         news_items = fetch_news(symbol, company_hint)
     except Exception as e:
         errors.append(f"News: {e}")
 
-    # 5. DeepSeek
+    # 6. DeepSeek
     verdict = {}
     try:
         prompt = _build_prompt(
@@ -660,6 +983,8 @@ def run_analysis(
             cot=cot,
             fear_greed=fear_greed,
             onchain=onchain,
+            fundamentals=fundamentals,
+            fundamentals_source=fundamentals_source,
         )
         verdict = _call_deepseek(prompt)
     except Exception as e:
@@ -668,6 +993,7 @@ def run_analysis(
             "verdict": "НЕЙТРАЛЬНО",
             "confidence": 1,
             "news_summary": "Не удалось получить анализ от AI.",
+            "fundamental_summary": None,
             "cot_summary": None,
             "macro_summary": None,
             "onchain_summary": None,
@@ -687,6 +1013,8 @@ def run_analysis(
         "cot": cot,
         "fear_greed": fear_greed,
         "onchain": onchain,
+        "fundamentals": fundamentals,
+        "fundamentals_source": fundamentals_source,
         "verdict": verdict,
         "errors": errors,
     }

@@ -210,6 +210,63 @@ export function AnalysisResult({ result }) {
         </Section>
       )}
 
+      {(result.fundamentals || v.fundamental_summary) && (
+        <Section title={`Фундаментальный анализ${result.fundamentals_source ? ` · ${result.fundamentals_source}` : ""}`}>
+          {result.fundamentals && (() => {
+            const f = result.fundamentals;
+            const rows = [
+              f.pe            != null && { k: "P/E",          v: f.pe.toFixed(1) },
+              f.forward_pe    != null && { k: "P/E (fwd)",    v: f.forward_pe.toFixed(1) },
+              f.pb            != null && { k: "P/B",          v: f.pb.toFixed(2) },
+              f.ps            != null && { k: "P/S",          v: f.ps.toFixed(2) },
+              f.ev_ebitda     != null && { k: "EV/EBITDA",    v: f.ev_ebitda.toFixed(1) },
+              f.roe           != null && { k: "ROE",          v: (f.roe * 100).toFixed(1) + "%" },
+              f.roa           != null && { k: "ROA",          v: (f.roa * 100).toFixed(1) + "%" },
+              f.net_margin    != null && { k: "Чист. маржа",  v: (f.net_margin * 100).toFixed(1) + "%" },
+              f.gross_margin  != null && { k: "Валов. маржа", v: (f.gross_margin * 100).toFixed(1) + "%" },
+              f.debt_equity   != null && { k: "D/E",          v: f.debt_equity.toFixed(2) },
+              f.current_ratio != null && { k: "Current",      v: f.current_ratio.toFixed(2) },
+              f.dividend_yield!= null && { k: "Дивиденды",    v: (f.dividend_yield * 100).toFixed(2) + "%" },
+              f.beta          != null && { k: "Beta",         v: f.beta.toFixed(2) },
+            ].filter(Boolean);
+            const fmtB = n => n == null ? "—" : Math.abs(n) >= 1e12 ? (n/1e12).toFixed(2)+"T" : Math.abs(n) >= 1e9 ? (n/1e9).toFixed(2)+"B" : Math.abs(n) >= 1e6 ? (n/1e6).toFixed(1)+"M" : String(n);
+            return (
+              <>
+                {rows.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: "6px 12px", marginBottom: 12 }}>
+                    {rows.map(({ k, v }) => (
+                      <div key={k} style={{ background: "var(--panel-2, rgba(255,255,255,.04))", borderRadius: 7, padding: "6px 10px" }}>
+                        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 2 }}>{k}</div>
+                        <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700 }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(f.revenue || f.net_income || f.ebitda || f.free_cash_flow) && (
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8, fontSize: 12, color: "var(--muted-2)" }}>
+                    {f.revenue        != null && <span>Выручка: <b style={{ color: "var(--text)" }}>{fmtB(f.revenue)}</b></span>}
+                    {f.ebitda         != null && <span>EBITDA: <b style={{ color: "var(--text)" }}>{fmtB(f.ebitda)}</b></span>}
+                    {f.net_income     != null && <span>Чист. прибыль: <b style={{ color: f.net_income >= 0 ? "var(--long)" : "var(--short)" }}>{fmtB(f.net_income)}</b></span>}
+                    {f.free_cash_flow != null && <span>FCF: <b style={{ color: "var(--text)" }}>{fmtB(f.free_cash_flow)}</b></span>}
+                  </div>
+                )}
+                {(f.total_assets || f.equity || f.cash) && (
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--muted-2)" }}>
+                    {f.total_assets      != null && <span>Активы: <b style={{ color: "var(--text)" }}>{fmtB(f.total_assets)}</b></span>}
+                    {f.equity            != null && <span>Капитал: <b style={{ color: "var(--text)" }}>{fmtB(f.equity)}</b></span>}
+                    {f.cash              != null && <span>Кэш: <b style={{ color: "var(--text)" }}>{fmtB(f.cash)}</b></span>}
+                    {f.total_liabilities != null && <span>Обязат.: <b style={{ color: "var(--short)" }}>{fmtB(f.total_liabilities)}</b></span>}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+          {v.fundamental_summary && (
+            <p style={{ fontSize: 13, lineHeight: 1.6, margin: "10px 0 0", opacity: 0.85 }}>{v.fundamental_summary}</p>
+          )}
+        </Section>
+      )}
+
       {result.cot && (
         <Section title={`COT позиции (CFTC) · ${result.cot.market}`}>
           <CotBar cot={result.cot} />
