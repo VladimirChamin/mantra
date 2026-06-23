@@ -276,9 +276,105 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     ? Math.abs(levels.take_profit - levels.entry) / levels.entry : null;
 
   return (
-    <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
-      {/* ── Левая колонка: граф ───────────────────────────────────── */}
-      <div style={{ flex: "1 1 520px", minWidth: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* ── Сигнал-панель над графиком ────────────────────────────── */}
+      {hasTrade && (
+        <div style={{
+          display: "flex", alignItems: "stretch", flexWrap: "wrap", gap: 0,
+          border: "1px solid var(--line)", borderRadius: 12, overflow: "hidden",
+          background: "var(--panel)",
+        }}>
+          {/* Направление */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "10px 20px", borderRight: "1px solid var(--line)",
+            minWidth: 110,
+          }}>
+            <span style={{
+              fontSize: 13, fontWeight: 800, padding: "4px 14px", borderRadius: 20,
+              background: dir === "long" ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)",
+              color: accentColor, border: `1.5px solid ${accentColor}`,
+            }}>
+              {dir === "long" ? "↑ Лонг" : "↓ Шорт"}
+            </span>
+          </div>
+
+          {/* Уровни */}
+          {[
+            { label: "Вход", value: levels.entry, color: "var(--text)", badge: orderLabel },
+            { label: "Тейк-профит", value: levels.take_profit, color: "var(--long)", bg: "rgba(16,185,129,.07)" },
+            { label: "Стоп-лосс",   value: levels.stop_loss,   color: "var(--short)", bg: "rgba(239,68,68,.07)" },
+          ].map(({ label, value, color, bg, badge }) => (
+            <div key={label} style={{
+              flex: "1 1 120px", padding: "10px 16px",
+              borderRight: "1px solid var(--line-soft)",
+              background: bg || "transparent",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{label}</span>
+                {badge && (
+                  <span style={{
+                    fontSize: 9, fontFamily: "var(--mono)", fontWeight: 700,
+                    padding: "1px 5px", borderRadius: 4,
+                    background: badge === "market" ? "rgba(100,116,139,.15)"
+                              : badge === "stop"   ? "rgba(245,158,11,.15)"
+                              : "rgba(99,102,241,.15)",
+                    color: badge === "market" ? "var(--muted)"
+                         : badge === "stop"   ? "#f59e0b"
+                         : "#6366f1",
+                    border: `1px solid ${badge === "market" ? "var(--line)" : badge === "stop" ? "#f59e0b44" : "#6366f144"}`,
+                    textTransform: "uppercase", letterSpacing: "0.04em",
+                  }}>{badge}</span>
+                )}
+              </div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color }}>{fmtN(value)}</div>
+            </div>
+          ))}
+
+          {/* Вероятность */}
+          {prob != null && (
+            <div style={{ flex: "1 1 120px", padding: "10px 16px", borderRight: "1px solid var(--line-soft)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>Вероятность</span>
+                <span style={{
+                  fontFamily: "var(--mono)", fontSize: 14, fontWeight: 700,
+                  color: prob >= 0.6 ? "var(--long)" : prob >= 0.5 ? "#f59e0b" : "var(--short)",
+                }}>
+                  {(prob * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div style={{ height: 5, borderRadius: 3, background: "var(--ink-2)", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", borderRadius: 3,
+                  width: `${Math.round(prob * 100)}%`,
+                  background: prob >= 0.6 ? "var(--long)" : prob >= 0.5 ? "#f59e0b" : "var(--short)",
+                }} />
+              </div>
+            </div>
+          )}
+
+          {/* Риск-метрики */}
+          <div style={{ flex: "1 1 200px", padding: "10px 16px" }}>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Риск-метрики</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: "4px 20px" }}>
+              {[
+                { k: "Риск",    v: riskPct != null ? fmtPct(riskPct) : "—", c: "var(--short)" },
+                { k: "Награда", v: rewPct  != null ? fmtPct(rewPct)  : "—", c: "var(--long)"  },
+                { k: "R:R",     v: rr      != null ? rr              : "—", c: "var(--text)"  },
+                { k: "Волат.",  v: fwdVol  != null ? fmtN(fwdVol, 4) : "—", c: "var(--muted)" },
+              ].map(({ k, v }) => (
+                <div key={k}>
+                  <div style={{ fontSize: 10, color: "var(--muted-2)", marginBottom: 1 }}>{k}</div>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── График ────────────────────────────────────────────────── */}
+      <div style={{ minWidth: 0 }}>
         {/* Заголовок графика */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
           <span style={{ fontFamily: "var(--mono)", fontWeight: 700, fontSize: 15, color: "var(--text)" }}>
@@ -626,111 +722,9 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
       </div>
 
-      {/* ── Правая колонка: сигнал-панель ─────────────────────────── */}
-      {hasTrade && (
-        <div style={{
-          flex: "0 0 200px", display: "flex", flexDirection: "column", gap: 0,
-          border: "1px solid var(--line)", borderRadius: 12, overflow: "hidden",
-          background: "var(--panel)",
-        }}>
-          {/* Заголовок */}
-          <div style={{
-            padding: "12px 14px 10px",
-            borderBottom: "1px solid var(--line)",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontFamily: "var(--mono)" }}>
-              Сигнал
-            </span>
-            <span style={{
-              fontSize: 12, fontWeight: 800, padding: "3px 12px", borderRadius: 20,
-              background: dir === "long" ? "rgba(16,185,129,.15)" : "rgba(239,68,68,.15)",
-              color: accentColor, border: `1.5px solid ${accentColor}`,
-            }}>
-              {dir === "long" ? "↑ Лонг" : "↓ Шорт"}
-            </span>
-          </div>
-
-          {/* Уровни */}
-          {[
-            { label: "Вход", value: levels.entry, color: "var(--text)", badge: orderLabel },
-            { label: "Тейк-профит", value: levels.take_profit, color: "var(--long)", bg: "rgba(16,185,129,.07)" },
-            { label: "Стоп-лосс",   value: levels.stop_loss,   color: "var(--short)", bg: "rgba(239,68,68,.07)" },
-          ].map(({ label, value, color, bg, badge }) => (
-            <div key={label} style={{
-              padding: "10px 14px",
-              borderBottom: "1px solid var(--line-soft)",
-              background: bg || "transparent",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                <span style={{ fontSize: 11, color: "var(--muted)" }}>{label}</span>
-                {badge && (
-                  <span style={{
-                    fontSize: 9, fontFamily: "var(--mono)", fontWeight: 700,
-                    padding: "1px 5px", borderRadius: 4,
-                    background: badge === "market" ? "rgba(100,116,139,.15)"
-                              : badge === "stop"   ? "rgba(245,158,11,.15)"
-                              : "rgba(99,102,241,.15)",
-                    color: badge === "market" ? "var(--muted)"
-                         : badge === "stop"   ? "#f59e0b"
-                         : "#6366f1",
-                    border: `1px solid ${badge === "market" ? "var(--line)" : badge === "stop" ? "#f59e0b44" : "#6366f144"}`,
-                    textTransform: "uppercase", letterSpacing: "0.04em",
-                  }}>{badge}</span>
-                )}
-              </div>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color }}>
-                {fmtN(value)}
-              </div>
-            </div>
-          ))}
-
-          {/* Вероятность */}
-          {prob != null && (
-            <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-soft)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                <span style={{ fontSize: 11, color: "var(--muted)" }}>Вероятность</span>
-                <span style={{
-                  fontFamily: "var(--mono)", fontSize: 14, fontWeight: 700,
-                  color: prob >= 0.6 ? "var(--long)" : prob >= 0.5 ? "#f59e0b" : "var(--short)",
-                }}>
-                  {(prob * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div style={{ height: 5, borderRadius: 3, background: "var(--ink-2)", overflow: "hidden" }}>
-                <div style={{
-                  height: "100%", borderRadius: 3,
-                  width: `${Math.round(prob * 100)}%`,
-                  background: prob >= 0.6 ? "var(--long)" : prob >= 0.5 ? "#f59e0b" : "var(--short)",
-                }} />
-              </div>
-            </div>
-          )}
-
-          {/* Риск-метрики */}
-          <div style={{ padding: "10px 14px" }}>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, fontWeight: 600 }}>Риск-метрики</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px" }}>
-              {[
-                { k: "Риск",    v: riskPct != null ? fmtPct(riskPct) : "—", c: "var(--short)" },
-                { k: "Награда", v: rewPct  != null ? fmtPct(rewPct)  : "—", c: "var(--long)"  },
-                { k: "R:R",     v: rr      != null ? rr              : "—", c: "var(--text)"  },
-                { k: "Волат.",  v: fwdVol  != null ? fmtN(fwdVol, 4) : "—", c: "var(--muted)" },
-              ].map(({ k, v }) => (
-                <div key={k}>
-                  <div style={{ fontSize: 10, color: "var(--muted-2)", marginBottom: 2 }}>{k}</div>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{v}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Обоснование прогноза ──────────────────────────────────── */}
       {signal?.explanation?.length > 0 && (
         <div style={{
-          marginTop: 14, width: "100%",
           border: "1px solid var(--line)", borderRadius: 10,
           background: "var(--panel)", overflow: "hidden",
         }}>
