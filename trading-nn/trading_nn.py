@@ -1801,12 +1801,6 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     _has_trade  = sig["direction"] in ("LONG", "SHORT")
     _bull_trend = (sig["direction"] == "LONG") if _has_trade else (fwd_ret >= 0)
     _tp_price   = sig["take_profit"] if _has_trade else price0 * (1 + fwd_ret)
-
-    # Паттерн чередования свечей по тренду / против тренда (коррекции).
-    # True = свеча по тренду, False = коррекция.
-    # Примерно 2/3 по тренду, 1/3 против — реалистично для трендового движения.
-    _pattern = [True, True, False, True, True, False, True, False,
-                True, True, True, False, True, False, True]
     _pivot_vals = sorted([_s3, _s2, _s1, _pp, _r1, _r2, _r3])
 
     prev_c = price0
@@ -1816,46 +1810,84 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
 
     rng = np.random.default_rng(42)   # детерминированный шум
 
+    total_move = _tp_price - price0
+
+    # Строим профиль накопленного движения по барам:
+    # Фаза 1 (первые ~30%): консолидация / пологий дрейф ±15% от общего хода
+    # Фаза 2 (середина ~40%): импульс — основная часть хода (~70%)
+    # Фаза 3 (последние ~30%): коррекция + доработка к цели
+    def _progress(t: int, n: int) -> float:
+        """Возвращает долю пройденного пути [0..1] на шаге t из n."""
+        frac = t / n
+        if frac <= 0.30:
+            # консолидация: слабый дрейф, максимум 15% хода
+            return frac / 0.30 * 0.15
+        elif frac <= 0.70:
+            # импульс: от 15% до 85%
+            return 0.15 + (frac - 0.30) / 0.40 * 0.70
+        else:
+            # завершение: от 85% до 100%
+            return 0.85 + (frac - 0.70) / 0.30 * 0.15
+
     path = []
     for t in range(1, steps + 1):
+        prog = _progress(t, steps)
         frac = t / steps
-        # Целевая цена на этом шаге — плавная интерполяция к TP
-        mid  = price0 + (_tp_price - price0) * frac
+
+        # Целевая цена на этом шаге по нелинейному профилю
+        mid  = price0 + total_move * prog
         band = band_k * per_bar_vol * (t ** 0.5)
 
-        with_trend = _pattern[(t - 1) % len(_pattern)]
-        # is_bull: True если свеча закрывается выше open
-        is_bull = with_trend if _bull_trend else (not with_trend)
+        # Фаза определяет характер свечей
+        phase_frac = frac
+        in_consolidation = phase_frac <= 0.30
+        in_impulse       = 0.30 < phase_frac <= 0.70
+        in_finish        = phase_frac > 0.70
 
-        # Размах тела: по тренду — крупнее, против — меньше
-        body_mult  = 0.55 if with_trend else 0.30
-        # Небольшой случайный множитель ±20% для живости
-        noise      = float(rng.uniform(0.80, 1.20))
-        body_size  = _atr_bar * body_mult * noise * max(0.5, 1.0 - frac * 0.4)
+        if in_consolidation:
+            # Боковик: чередуем в/п, тела маленькие
+            is_bull = bool((t % 3) != 0) if _bull_trend else bool((t % 3) == 0)
+            body_mult = float(rng.uniform(0.15, 0.35))
+        elif in_impulse:
+            # Импульс: 3 свечи по тренду, 1 против
+            with_trend = (t % 4) != 0
+            is_bull = with_trend if _bull_trend else not with_trend
+            body_mult = float(rng.uniform(0.55, 0.90)) if with_trend else float(rng.uniform(0.15, 0.30))
+        else:
+            # Завершение: ослабевающий импульс
+            with_trend = (t % 3) != 0
+            is_bull = with_trend if _bull_trend else not with_trend
+            body_mult = float(rng.uniform(0.30, 0.60)) if with_trend else float(rng.uniform(0.10, 0.25))
 
-        bar_open = prev_c
-        # Сырое смещение тела
+        noise     = float(rng.uniform(0.85, 1.15))
+        body_size = _atr_bar * body_mult * noise
+
+        bar_open  = prev_c
         raw_close = prev_c + (body_size if is_bull else -body_size)
-        # Притягиваем к траектории mid: сила притяжения растёт ближе к концу
-        pull = 0.45 + frac * 0.35
+
+        # Притяжение к целевой траектории (слабее в импульсе, сильнее в завершении)
+        pull = 0.20 if in_impulse else (0.35 if in_consolidation else 0.55)
         bar_close = raw_close * (1 - pull) + mid * pull
 
-        # Небольшое притяжение к ближайшему уровню пивота
-        nearest_pivot = min(_pivot_vals, key=lambda v: abs(v - mid))
-        bar_close = bar_close * 0.94 + nearest_pivot * 0.06
-
-        # Последняя свеча точно приходит к TP
+        # Последняя свеча точно закрывается у TP
         if t == steps:
             bar_close = _tp_price
 
-        # Фитили: верхний и нижний, небольшие (15-30% от тела)
-        body_abs = abs(bar_close - bar_open)
-        wick_top = body_abs * float(rng.uniform(0.10, 0.30))
-        wick_bot = body_abs * float(rng.uniform(0.10, 0.30))
+        # Фитили: реалистичные соотношения
+        body_abs  = abs(bar_close - bar_open)
+        wick_mult = float(rng.uniform(0.15, 0.45))
+        # Против тренда — длинный фитиль в нежелательную сторону
+        if is_bull:
+            wick_top = body_abs * wick_mult * 0.6
+            wick_bot = body_abs * wick_mult
+        else:
+            wick_top = body_abs * wick_mult
+            wick_bot = body_abs * wick_mult * 0.6
+
         bar_high = max(bar_open, bar_close) + wick_top
         bar_low  = min(bar_open, bar_close) - wick_bot
 
-        # Последняя свеча: фитиль обязательно достигает TP
+        # Последняя свеча: фитиль касается TP
         if t == steps:
             if _bull_trend:
                 bar_high = max(bar_high, _tp_price)
