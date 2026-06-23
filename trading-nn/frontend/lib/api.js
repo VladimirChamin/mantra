@@ -89,6 +89,9 @@ export const api = {
     req(`/api/feature_importance?symbol=${symbol}&interval=${interval}`),
   // Реальные бары после прогноза (для сравнения)
   getAvailableIntervals: (symbol) => req(`/api/models/available?symbol=${encodeURIComponent(symbol)}`),
+  screenerStart: (payload) => req("/api/screener/start", { method: "POST", body: JSON.stringify(payload) }),
+  screenerStatus: (jid) => req(`/api/screener/${jid}`),
+  screenerCancel: (jid) => req(`/api/screener/${jid}/cancel`, { method: "POST" }),
   getSignalAnalysis: (signalId) => req(`/api/signals/${signalId}/analysis`),
   getActuals: ({ symbol, interval, from_time, steps }) =>
     req(`/api/actuals?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&from_time=${encodeURIComponent(from_time || "")}&steps=${steps || 10}`),

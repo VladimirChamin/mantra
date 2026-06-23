@@ -1277,6 +1277,100 @@ def deactivate_model(req: WfActivateReq, _=Depends(auth.require_admin)):
     return {"deactivated": True, "tag": tag, "active": list(current)}
 
 
+# =============================================================================
+# Скриннер — фоновое сканирование
+# =============================================================================
+SCREENER_WATCHLIST = [
+    {"symbol": "BTCUSDT", "label": "Bitcoin",   "asset_class": "crypto"},
+    {"symbol": "ETHUSDT", "label": "Ethereum",  "asset_class": "crypto"},
+    {"symbol": "SOLUSDT", "label": "Solana",    "asset_class": "crypto"},
+    {"symbol": "SBER",    "label": "Сбербанк",  "asset_class": "stocks"},
+    {"symbol": "GAZP",    "label": "Газпром",   "asset_class": "stocks"},
+    {"symbol": "LKOH",    "label": "Лукойл",    "asset_class": "stocks"},
+    {"symbol": "NVTK",    "label": "Новатэк",   "asset_class": "stocks"},
+    {"symbol": "YDEX",    "label": "Яндекс",    "asset_class": "stocks"},
+    {"symbol": "XAUUSD",  "label": "Золото",    "asset_class": "commodity"},
+    {"symbol": "XAGUSD",  "label": "Серебро",   "asset_class": "commodity"},
+    {"symbol": "EURUSD",  "label": "EUR/USD",   "asset_class": "forex"},
+    {"symbol": "GBPUSD",  "label": "GBP/USD",   "asset_class": "forex"},
+    {"symbol": "USDJPY",  "label": "USD/JPY",   "asset_class": "forex"},
+]
+
+
+class ScreenerReq(BaseModel):
+    interval: str = "1d"
+    asset_class: str = "all"  # "all" | "crypto" | "stocks" | ...
+
+
+def _run_screener(jid: str, interval: str, asset_class: str, user_id: int):
+    items = [w for w in SCREENER_WATCHLIST
+             if asset_class == "all" or w["asset_class"] == asset_class]
+    total = len(items)
+    results = []
+    errors = []
+    active_tags = auth.get_active_models() or None
+
+    JOBS.update(jid, status="running", progress=0.0)
+
+    for idx, item in enumerate(items):
+        if JOBS.is_cancelled(jid):
+            JOBS.update(jid, status="cancelled")
+            return
+
+        try:
+            cfg = tn.make_config(item["symbol"], interval)
+            res = tn.forecast(cfg, steps=10, history=50, active_tags=active_tags)
+            if res.get("signal"):
+                sig = dict(res["signal"])
+                sig.update({
+                    "symbol":      item["symbol"],
+                    "label":       item["label"],
+                    "asset_class": item["asset_class"],
+                    "interval":    interval,
+                })
+                results.append(sig)
+                JOBS.update(jid, result={"results": results, "errors": errors})
+        except Exception as e:
+            errors.append({"symbol": item["symbol"], "msg": str(e)})
+            JOBS.update(jid, result={"results": results, "errors": errors})
+
+        progress = round(((idx + 1) / total) * 100)
+        JOBS.update(jid, progress=progress,
+                    result={"results": results, "errors": errors})
+        JOBS.log(jid, f"{item['symbol']} — готово ({idx+1}/{total})")
+
+    JOBS.update(jid, status="done", progress=100,
+                result={"results": results, "errors": errors})
+
+
+@app.post("/api/screener/start", tags=["screener"])
+def screener_start(req: ScreenerReq, current_user: dict = Depends(auth.get_current_user)):
+    jid = JOBS.create("screener", {"interval": req.interval, "asset_class": req.asset_class})
+    _run_async(_run_screener, jid, req.interval, req.asset_class, current_user["id"])
+    return {"job_id": jid}
+
+
+@app.get("/api/screener/{jid}", tags=["screener"])
+def screener_status(jid: str, current_user: dict = Depends(auth.get_current_user)):
+    job = JOBS.get(jid)
+    if not job:
+        raise HTTPException(404, "Задача не найдена")
+    return {
+        "job_id":   job["id"],
+        "status":   job["status"],
+        "progress": job["progress"],
+        "result":   job.get("result") or {"results": [], "errors": []},
+    }
+
+
+@app.post("/api/screener/{jid}/cancel", tags=["screener"])
+def screener_cancel(jid: str, current_user: dict = Depends(auth.get_current_user)):
+    ok = JOBS.cancel(jid)
+    if not ok:
+        raise HTTPException(400, "Задача не найдена или уже завершена")
+    return {"ok": True}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api_server:app", host="0.0.0.0", port=8000, reload=False)

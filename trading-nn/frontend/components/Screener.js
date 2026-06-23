@@ -1,44 +1,82 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
-
-const WATCHLIST = [
-  { symbol: "BTCUSDT", label: "Bitcoin", class: "crypto" },
-  { symbol: "ETHUSDT", label: "Ethereum", class: "crypto" },
-  { symbol: "SOLUSDT", label: "Solana", class: "crypto" },
-  { symbol: "SBER",    label: "Сбербанк", class: "stocks" },
-  { symbol: "GAZP",    label: "Газпром", class: "stocks" },
-  { symbol: "LKOH",    label: "Лукойл", class: "stocks" },
-  { symbol: "NVTK",    label: "Новатэк", class: "stocks" },
-  { symbol: "YDEX",    label: "Яндекс", class: "stocks" },
-  { symbol: "XAUUSD",  label: "Золото", class: "commodity" },
-  { symbol: "XAGUSD",  label: "Серебро", class: "commodity" },
-  { symbol: "EURUSD",  label: "EUR/USD", class: "forex" },
-  { symbol: "GBPUSD",  label: "GBP/USD", class: "forex" },
-  { symbol: "USDJPY",  label: "USD/JPY", class: "forex" },
-];
 
 const CLASS_LABELS = { crypto: "Крипта", stocks: "Акции", commodity: "Товары", forex: "Форекс", bonds: "Облигации" };
 const DIRS = ["LONG", "SHORT", "FLAT"];
 const CLASSES = ["all", "crypto", "stocks", "commodity", "forex", "bonds"];
-
 const DIR_COLOR = { LONG: "var(--long)", SHORT: "var(--short)", FLAT: "var(--muted)" };
 
 export default function Screener({ onScanDone }) {
   const [interval, setInterval] = useState("1d");
-  const [minProb, setMinProb] = useState(55);
-  const [dirFilter, setDirFilter] = useState("all");
+  const [minProb, setMinProb]   = useState(55);
+  const [dirFilter, setDirFilter]     = useState("all");
   const [classFilter, setClassFilter] = useState("all");
-
-  const [results, setResults] = useState([]);
-  const [scanning, setScanning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [done, setDone] = useState(false);
-  const [errors, setErrors] = useState([]); // [{symbol, msg}]
-
-  const [sortBy, setSortBy] = useState("prob_up");
+  const [sortBy, setSortBy]   = useState("prob_up");
   const [sortDir, setSortDir] = useState(-1);
+
+  const [jobId, setJobId]       = useState(null);
+  const [status, setStatus]     = useState("idle"); // idle | running | done | cancelled | error
+  const [progress, setProgress] = useState(0);
+  const [results, setResults]   = useState([]);
+  const [errors, setErrors]     = useState([]);
+
+  const pollRef = useRef(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+
+  const poll = useCallback(async (jid) => {
+    try {
+      const data = await api.screenerStatus(jid);
+      setProgress(data.progress ?? 0);
+      setResults(data.result?.results ?? []);
+      setErrors(data.result?.errors ?? []);
+      if (data.status === "done") {
+        setStatus("done");
+        stopPolling();
+        onScanDone?.();
+      } else if (data.status === "cancelled" || data.status === "error") {
+        setStatus(data.status);
+        stopPolling();
+      }
+    } catch {
+      // сеть временно недоступна — ждём следующего тика
+    }
+  }, [stopPolling, onScanDone]);
+
+  const startScan = useCallback(async () => {
+    stopPolling();
+    setResults([]);
+    setErrors([]);
+    setProgress(0);
+    setStatus("running");
+
+    try {
+      const { job_id } = await api.screenerStart({ interval, asset_class: classFilter });
+      setJobId(job_id);
+      pollRef.current = setInterval(() => poll(job_id), 2000);
+    } catch (e) {
+      setStatus("error");
+    }
+  }, [interval, classFilter, poll, stopPolling]);
+
+  const cancelScan = useCallback(async () => {
+    if (!jobId) return;
+    try { await api.screenerCancel(jobId); } catch {}
+    setStatus("cancelled");
+    stopPolling();
+  }, [jobId, stopPolling]);
+
+  // Cleanup on unmount — НЕ отменяем задачу, просто перестаём поллить
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  function toggleSort(col) {
+    if (sortBy === col) setSortDir(d => -d);
+    else { setSortBy(col); setSortDir(-1); }
+  }
 
   const filtered = results
     .filter(r => dirFilter === "all" || r.direction === dirFilter)
@@ -46,76 +84,33 @@ export default function Screener({ onScanDone }) {
     .filter(r => (r.prob_up ?? 0) * 100 >= minProb)
     .sort((a, b) => sortDir * ((a[sortBy] ?? 0) - (b[sortBy] ?? 0)));
 
-  const startScan = useCallback(async () => {
-    setScanning(true);
-    setResults([]);
-    setErrors([]);
-    setDone(false);
-    setProgress(0);
-
-    const items = classFilter === "all" ? WATCHLIST : WATCHLIST.filter(w => w.class === classFilter);
-    const newResults = [];
-    const newErrors = [];
-
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      try {
-        const data = await api.forecast({ symbol: item.symbol, interval, steps: 10, history: 50 });
-        if (data?.signal) {
-          newResults.push({
-            ...data.signal,
-            symbol: item.symbol,
-            label: item.label,
-            asset_class: item.class,
-            interval,
-          });
-          setResults([...newResults]);
-        }
-      } catch (e) {
-        newErrors.push({ symbol: item.symbol, msg: e?.message || "неизвестная ошибка" });
-      }
-      setProgress(Math.round(((i + 1) / items.length) * 100));
-    }
-
-    setErrors(newErrors);
-    setScanning(false);
-    setDone(true);
-    onScanDone?.();
-  }, [interval, classFilter, onScanDone]);
-
-  function toggleSort(col) {
-    if (sortBy === col) setSortDir(d => -d);
-    else { setSortBy(col); setSortDir(-1); }
-  }
-
   function SortTh({ col, children }) {
     const active = sortBy === col;
     return (
-      <th
-        onClick={() => toggleSort(col)}
-        style={{
-          padding: "7px 10px", borderBottom: "1px solid var(--line)",
-          fontWeight: 500, cursor: "pointer", userSelect: "none",
-          color: active ? "var(--primary)" : "var(--muted)",
-          whiteSpace: "nowrap",
-        }}
-      >
+      <th onClick={() => toggleSort(col)} style={{
+        padding: "7px 10px", borderBottom: "1px solid var(--line)",
+        fontWeight: 500, cursor: "pointer", userSelect: "none",
+        color: active ? "var(--primary)" : "var(--muted)", whiteSpace: "nowrap",
+      }}>
         {children} {active ? (sortDir === -1 ? "↓" : "↑") : ""}
       </th>
     );
   }
+
+  const scanning = status === "running";
+  const done     = status === "done";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {/* Параметры */}
       <div className="card">
         <h2>Скриннер инвестиционных идей</h2>
-        <p className="sub">Массовое сканирование активов. Для каждого инструмента запрашивается прогноз нейросети.</p>
+        <p className="sub">Массовое сканирование активов. Сканирование работает на сервере — можно переключать вкладки.</p>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
           <div className="field">
             <label>Таймфрейм</label>
-            <select value={interval} onChange={e => setInterval(e.target.value)}>
+            <select value={interval} onChange={e => setInterval(e.target.value)} disabled={scanning}>
               <option value="1d">1D — дневной</option>
               <option value="4h">4H — четырёхчасовой</option>
             </select>
@@ -134,7 +129,7 @@ export default function Screener({ onScanDone }) {
           </div>
           <div className="field">
             <label>Класс актива</label>
-            <select value={classFilter} onChange={e => setClassFilter(e.target.value)}>
+            <select value={classFilter} onChange={e => setClassFilter(e.target.value)} disabled={scanning}>
               {CLASSES.map(c => (
                 <option key={c} value={c}>{c === "all" ? "Все" : CLASS_LABELS[c] || c}</option>
               ))}
@@ -142,22 +137,37 @@ export default function Screener({ onScanDone }) {
           </div>
         </div>
 
-        <button className="btn" onClick={startScan} disabled={scanning} style={{ maxWidth: 240 }}>
-          {scanning ? `Сканирование… ${progress}%` : "Запустить скриннер"}
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button className="btn" onClick={startScan} disabled={scanning} style={{ maxWidth: 240 }}>
+            {scanning ? `Сканирование… ${progress}%` : "Запустить скриннер"}
+          </button>
+          {scanning && (
+            <button onClick={cancelScan} style={{
+              background: "none", border: "1px solid var(--short)", color: "var(--short)",
+              borderRadius: 6, padding: "5px 14px", cursor: "pointer", fontSize: 12,
+            }}>
+              Остановить
+            </button>
+          )}
+          {status === "cancelled" && (
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>Остановлено</span>
+          )}
+        </div>
 
-        {scanning && (
+        {(scanning || (done && results.length > 0)) && (
           <div style={{ marginTop: 12 }}>
             <div style={{ height: 4, background: "var(--line-soft)", borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", background: "var(--primary)", width: `${progress}%`, transition: "width .3s" }} />
+              <div style={{ height: "100%", background: "var(--primary)", width: `${progress}%`, transition: "width .4s" }} />
             </div>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-              Обработано {Math.round((progress / 100) * (classFilter === "all" ? WATCHLIST.length : WATCHLIST.filter(w => w.class === classFilter).length))} / {classFilter === "all" ? WATCHLIST.length : WATCHLIST.filter(w => w.class === classFilter).length} инструментов
-            </div>
+            {scanning && (
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                Найдено сигналов: {results.length} · Обработано: {progress}%
+              </div>
+            )}
           </div>
         )}
 
-        {done && errors.length > 0 && (
+        {errors.length > 0 && (
           <details style={{ marginTop: 10 }}>
             <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--short)" }}>
               Пропущено инструментов: {errors.length}
@@ -166,8 +176,7 @@ export default function Screener({ onScanDone }) {
               {errors.map(({ symbol, msg }) => (
                 <div key={symbol} style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)" }}>
                   <span style={{ color: "var(--text)", fontWeight: 600 }}>{symbol}</span>
-                  {" — "}
-                  {msg}
+                  {" — "}{msg}
                 </div>
               ))}
             </div>
@@ -183,6 +192,7 @@ export default function Screener({ onScanDone }) {
               <h2 style={{ margin: 0 }}>Инвестиционные идеи</h2>
               <p className="sub" style={{ margin: "4px 0 0" }}>
                 Найдено: {filtered.length} из {results.length} активов
+                {scanning && <span style={{ color: "var(--primary)", marginLeft: 8 }}>· обновляется…</span>}
               </p>
             </div>
             {done && (
@@ -216,7 +226,8 @@ export default function Screener({ onScanDone }) {
                 </thead>
                 <tbody>
                   {filtered.map((r, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid var(--line)", transition: "background .1s" }}
+                    <tr key={`${r.symbol}-${i}`}
+                      style={{ borderBottom: "1px solid var(--line)", transition: "background .1s" }}
                       onMouseEnter={e => e.currentTarget.style.background = "var(--panel-2)"}
                       onMouseLeave={e => e.currentTarget.style.background = ""}>
                       <td style={{ padding: "9px 10px" }}>
