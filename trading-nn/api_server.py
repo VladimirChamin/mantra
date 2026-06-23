@@ -1320,7 +1320,7 @@ def _run_screener(jid: str, interval: str, asset_class: str, user_id: int):
         try:
             cfg = tn.make_config(item["symbol"], interval)
             res = tn.forecast(cfg, steps=10, history=50, active_tags=active_tags)
-            if res.get("signal"):
+            if res.get("signal") and res["signal"].get("direction", "").upper() != "FLAT":
                 sig = dict(res["signal"])
                 sig.update({
                     "symbol":      item["symbol"],

@@ -309,6 +309,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               flex: "1 1 120px", padding: "10px 16px",
               borderRight: "1px solid var(--line-soft)",
               background: bg || "transparent",
+              display: "flex", flexDirection: "column", justifyContent: "center",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
                 <span style={{ fontSize: 11, color: "var(--muted)" }}>{label}</span>
@@ -333,7 +334,10 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
           {/* Вероятность */}
           {prob != null && (
-            <div style={{ flex: "1 1 120px", padding: "10px 16px", borderRight: "1px solid var(--line-soft)" }}>
+            <div style={{
+              flex: "1 1 120px", padding: "10px 16px", borderRight: "1px solid var(--line-soft)",
+              display: "flex", flexDirection: "column", justifyContent: "center",
+            }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
                 <span style={{ fontSize: 11, color: "var(--muted)" }}>Вероятность</span>
                 <span style={{
@@ -354,14 +358,17 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           )}
 
           {/* Риск-метрики */}
-          <div style={{ flex: "1 1 200px", padding: "10px 16px" }}>
+          <div style={{
+            flex: "1 1 200px", padding: "10px 16px",
+            display: "flex", flexDirection: "column", justifyContent: "center",
+          }}>
             <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Риск-метрики</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: "4px 20px" }}>
               {[
-                { k: "Риск",    v: riskPct != null ? fmtPct(riskPct) : "—", c: "var(--short)" },
-                { k: "Награда", v: rewPct  != null ? fmtPct(rewPct)  : "—", c: "var(--long)"  },
-                { k: "R:R",     v: rr      != null ? rr              : "—", c: "var(--text)"  },
-                { k: "Волат.",  v: fwdVol  != null ? fmtN(fwdVol, 4) : "—", c: "var(--muted)" },
+                { k: "Риск",    v: riskPct != null ? fmtPct(riskPct) : "—" },
+                { k: "Награда", v: rewPct  != null ? fmtPct(rewPct)  : "—" },
+                { k: "R:R",     v: rr      != null ? rr              : "—" },
+                { k: "Волат.",  v: fwdVol  != null ? fmtN(fwdVol, 4) : "—" },
               ].map(({ k, v }) => (
                 <div key={k}>
                   <div style={{ fontSize: 10, color: "var(--muted-2)", marginBottom: 1 }}>{k}</div>
