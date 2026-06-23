@@ -862,11 +862,12 @@ def forecast(
             sig = dict(result["signal"])
             sig["interval"] = req.interval
             fc_json = _json.dumps({
-                "history":  result.get("history", []),
-                "forecast": result.get("forecast", []),
-                "levels":   result.get("levels"),
-                "last_price": result.get("last_price"),
-                "signal":   result.get("signal"),
+                "history":     result.get("history", []),
+                "forecast":    result.get("forecast", []),
+                "levels":      result.get("levels"),
+                "last_price":  result.get("last_price"),
+                "signal":      result.get("signal"),
+                "pivot_levels": result.get("pivot_levels"),
             })
             explanation = sig.get("explanation")
             expl_json = _json.dumps(explanation, ensure_ascii=False) if explanation else None
