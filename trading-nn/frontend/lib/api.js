@@ -93,6 +93,13 @@ export const api = {
   screenerStatus: (jid) => req(`/api/screener/${jid}`),
   screenerCancel: (jid) => req(`/api/screener/${jid}/cancel`, { method: "POST" }),
   getSignalAnalysis: (signalId) => req(`/api/signals/${signalId}/analysis`),
-  getActuals: ({ symbol, interval, from_time, steps }) =>
-    req(`/api/actuals?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&from_time=${encodeURIComponent(from_time || "")}&steps=${steps || 10}`),
+  getActuals: ({ symbol, interval, from_time, steps, signal_direction, signal_entry, signal_sl, signal_tp }) => {
+    const p = new URLSearchParams({
+      symbol, interval,
+      from_time: from_time || "",
+      steps: steps || 10,
+      ...(signal_direction ? { signal_direction, signal_entry: signal_entry || 0, signal_sl: signal_sl || 0, signal_tp: signal_tp || 0 } : {}),
+    });
+    return req(`/api/actuals?${p}`);
+  },
 };

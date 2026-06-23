@@ -1696,6 +1696,43 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         df=df,
     )
 
+    # ── Условие отмены прогноза ───────────────────────────────────────────────
+    # invalidation_price: уровень, закрытие бара за которым делает сигнал недействительным
+    # Для LONG: цена закрытия ниже стоп-лосса → сигнал отменён
+    # Для SHORT: цена закрытия выше стоп-лосса → сигнал отменён
+    if direction == "LONG":
+        inv_price = round(sl, 2)
+        inv_event = (
+            f"Закрытие бара ниже {round(sl, 2)} (стоп-лосс). "
+            f"Означает пробой структуры вниз — сигнал на лонг недействителен."
+        )
+        inv_conditions = [
+            f"Цена закрытия опускается ниже {round(sl, 2)} — пробой стоп-уровня",
+            f"Горизонт {cfg.horizon} баров истёк, а вход так и не сработал",
+        ]
+        if order_type in ("BUYSTOP",):
+            inv_conditions.append(
+                f"До {fill_deadline or 'дедлайна'} цена не достигла {round(entry, 2)} — ордер не исполнен"
+            )
+    elif direction == "SHORT":
+        inv_price = round(sl, 2)
+        inv_event = (
+            f"Закрытие бара выше {round(sl, 2)} (стоп-лосс). "
+            f"Означает пробой структуры вверх — сигнал на шорт недействителен."
+        )
+        inv_conditions = [
+            f"Цена закрытия поднимается выше {round(sl, 2)} — пробой стоп-уровня",
+            f"Горизонт {cfg.horizon} баров истёк, а вход так и не сработал",
+        ]
+        if order_type in ("SELLSTOP",):
+            inv_conditions.append(
+                f"До {fill_deadline or 'дедлайна'} цена не достигла {round(entry, 2)} — ордер не исполнен"
+            )
+    else:
+        inv_price = None
+        inv_event = None
+        inv_conditions = []
+
     signal = {
         "time": str(bar_index),
         "symbol": cfg.symbol,
@@ -1713,6 +1750,12 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         "fill_deadline": fill_deadline,
         "entry_offset_atr": round(offset * atr_clamped, 4) if offset > 0 else 0,
         "explanation": explanation,
+        "invalidation": {
+            "price": inv_price,
+            "event": inv_event,
+            "conditions": inv_conditions,
+            "horizon_bars": cfg.horizon,
+        } if direction in ("LONG", "SHORT") else None,
     }
     return signal
 

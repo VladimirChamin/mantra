@@ -468,11 +468,20 @@ export default function Dashboard() {
       };
       setHistoryFc(baseEntry);
 
-      // Загружаем реальные бары асинхронно
+      // Загружаем реальные бары асинхронно + статус сигнала
       try {
-        const res = await api.getActuals({ symbol: s.symbol, interval: s.interval, from_time: fromTime, steps });
+        const sig = data.signal || {};
+        const res = await api.getActuals({
+          symbol: s.symbol, interval: s.interval, from_time: fromTime, steps,
+          signal_direction: sig.direction,
+          signal_entry: sig.entry,
+          signal_sl: sig.stop_loss,
+          signal_tp: sig.take_profit,
+        });
         if (res.bars?.length) {
-          setHistoryFc(prev => prev?.signal_id === s.id ? { ...prev, actuals: res.bars } : prev);
+          setHistoryFc(prev => prev?.signal_id === s.id
+            ? { ...prev, actuals: res.bars, signal_status: res.signal_status }
+            : prev);
         }
       } catch {}
     } catch {}

@@ -865,11 +865,16 @@ def get_actuals(
     interval: str = "1d",
     from_time: str = "",   # ISO datetime — начало (последний исторический бар прогноза)
     steps: int = 10,
+    # параметры сигнала для автоматической оценки статуса
+    signal_direction: str = "",   # LONG / SHORT
+    signal_entry: float = 0.0,
+    signal_sl: float = 0.0,
+    signal_tp: float = 0.0,
     current_user: dict = Depends(auth.get_current_user),
 ):
     """
     Возвращает реальные OHLCV-бары после даты прогноза для сравнения с прогнозным графиком.
-    steps — сколько баров вернуть (обычно = кол-во прогнозных свечей).
+    Если переданы параметры сигнала — дополнительно вычисляет статус: active/filled/invalidated/expired.
     """
     try:
         cfg = tn.make_config(symbol, interval)
@@ -877,17 +882,16 @@ def get_actuals(
         if from_time:
             try:
                 dt = pd.Timestamp(from_time)
-                # нормализуем timezone: если индекс tz-aware, а dt — naive, приводим
                 if df.index.tz is not None and dt.tzinfo is None:
                     dt = dt.tz_localize(df.index.tz)
                 elif df.index.tz is None and dt.tzinfo is not None:
                     dt = dt.tz_localize(None)
                 df = df[df.index > dt]
             except Exception:
-                return {"bars": []}   # не можем фильтровать — лучше ничего не вернуть
+                return {"bars": [], "signal_status": None}
         else:
-            return {"bars": []}       # from_time обязателен
-        df = df.head(steps + 1)   # берём чуть больше на случай пропусков
+            return {"bars": [], "signal_status": None}
+        df = df.head(steps + 1)
         bars = [
             {
                 "time":  str(ts),
@@ -898,7 +902,47 @@ def get_actuals(
             }
             for ts, row in df.iterrows()
         ]
-        return {"bars": bars}
+
+        # ── Автоматическая оценка статуса сигнала ─────────────────────────
+        signal_status = None
+        if signal_direction in ("LONG", "SHORT") and signal_sl and signal_tp and len(df):
+            status = "active"
+            invalidated_at = None
+            filled_at = None
+            expired = len(df) >= steps  # горизонт истёк
+
+            for ts, row in df.iterrows():
+                if signal_direction == "LONG":
+                    if float(row.close) < signal_sl:
+                        status = "invalidated"
+                        invalidated_at = str(ts)
+                        break
+                    if float(row.high) >= signal_tp:
+                        status = "filled"
+                        filled_at = str(ts)
+                        break
+                else:  # SHORT
+                    if float(row.close) > signal_sl:
+                        status = "invalidated"
+                        invalidated_at = str(ts)
+                        break
+                    if float(row.low) <= signal_tp:
+                        status = "filled"
+                        filled_at = str(ts)
+                        break
+
+            if status == "active" and expired:
+                status = "expired"
+
+            signal_status = {
+                "status": status,           # active | invalidated | filled | expired
+                "invalidated_at": invalidated_at,
+                "filled_at": filled_at,
+                "bars_elapsed": len(df),
+                "bars_total": steps,
+            }
+
+        return {"bars": bars, "signal_status": signal_status}
     except Exception as e:
         raise HTTPException(500, str(e))
 

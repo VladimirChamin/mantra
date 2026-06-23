@@ -91,7 +91,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
   }
 
-  const { history, forecast, levels, last_price, pivot_levels, indicators, symbol, interval, oos_auc, signal } = data;
+  const { history, forecast, levels, last_price, pivot_levels, indicators, symbol, interval, oos_auc, signal, signal_status } = data;
   const hN = history.length;
   const fN = forecast.length;
   const nowIdx = hN - 1;
@@ -360,6 +360,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           {/* Риск-метрики */}
           <div style={{
             flex: "1 1 200px", padding: "10px 16px",
+            borderRight: signal?.invalidation ? "1px solid var(--line-soft)" : "none",
             display: "flex", flexDirection: "column", justifyContent: "center",
           }}>
             <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Риск-метрики</div>
@@ -377,6 +378,50 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               ))}
             </div>
           </div>
+
+          {/* Условие отмены */}
+          {signal?.invalidation && (() => {
+            const inv = signal.invalidation;
+            const st  = signal_status?.status;
+            const stCfg = {
+              invalidated: { label: "Отменён",   bg: "rgba(239,68,68,.13)",   color: "var(--short)", border: "rgba(239,68,68,.3)"   },
+              filled:      { label: "Исполнен",  bg: "rgba(16,185,129,.13)",  color: "var(--long)",  border: "rgba(16,185,129,.3)"  },
+              expired:     { label: "Истёк",     bg: "rgba(100,116,139,.12)", color: "var(--muted)", border: "rgba(100,116,139,.3)" },
+              active:      { label: "Активен",   bg: "rgba(99,102,241,.10)",  color: "#6366f1",      border: "rgba(99,102,241,.25)" },
+            }[st] || null;
+            return (
+              <div style={{
+                flex: "1 1 220px", padding: "10px 16px",
+                display: "flex", flexDirection: "column", justifyContent: "center",
+                background: st === "invalidated" ? "rgba(239,68,68,.04)" : "transparent",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+                  <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Условие отмены
+                  </span>
+                  {stCfg && (
+                    <span style={{
+                      fontSize: 9, fontWeight: 700, fontFamily: "var(--mono)",
+                      padding: "1px 7px", borderRadius: 10,
+                      background: stCfg.bg, color: stCfg.color,
+                      border: `1px solid ${stCfg.border}`,
+                    }}>{stCfg.label}</span>
+                  )}
+                </div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, color: "var(--short)", marginBottom: 4 }}>
+                  {dir === "long" ? "Закрытие ниже" : "Закрытие выше"} {fmtN(inv.price)}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted-2)", lineHeight: 1.5 }}>
+                  {inv.conditions?.slice(0, 2).map((c, i) => (
+                    <div key={i} style={{ display: "flex", gap: 5 }}>
+                      <span style={{ color: "var(--short)", flexShrink: 0 }}>✕</span>
+                      <span>{c}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
