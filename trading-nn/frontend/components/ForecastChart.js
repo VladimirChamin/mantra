@@ -369,7 +369,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                 { k: "Риск",    v: riskPct != null ? fmtPct(riskPct) : "—" },
                 { k: "Награда", v: rewPct  != null ? fmtPct(rewPct)  : "—" },
                 { k: "R:R",     v: rr      != null ? rr              : "—" },
-                { k: "Волат.",  v: fwdVol  != null ? fmtN(fwdVol, 4) : "—" },
               ].map(({ k, v }) => (
                 <div key={k}>
                   <div style={{ fontSize: 10, color: "var(--muted-2)", marginBottom: 1 }}>{k}</div>
