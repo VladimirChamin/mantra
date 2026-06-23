@@ -560,21 +560,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           </div>
         )}
 
-        {/* OOS AUC */}
-        {oos_auc != null && (
-          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>OOS AUC:</span>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700,
-              color: oos_auc >= 0.56 ? "var(--long)" : oos_auc >= 0.54 ? "#f59e0b" : "var(--short)",
-            }}>
-              {oos_auc.toFixed(4)}
-            </span>
-            <span style={{ fontSize: 11, color: "var(--muted-2)" }}>
-              {oos_auc >= 0.56 ? "✓ Норма" : oos_auc >= 0.54 ? "⚠ Предупреждение" : "✗ Критично"}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* ── Правая колонка: сигнал-панель ─────────────────────────── */}
