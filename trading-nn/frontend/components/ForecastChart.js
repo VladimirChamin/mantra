@@ -558,7 +558,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               {/* Уровни сделки */}
               {levelLines.map((l, i) => (
                 <line key={i} x1={nowX ?? padL} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
-                      stroke={l.c} strokeWidth={showIndicators ? "2" : "1.1"}
+                      stroke={l.c} strokeWidth="1.1"
                       strokeDasharray="5 4" opacity="0.85" />
               ))}
 

@@ -1158,10 +1158,13 @@ export default function Dashboard() {
                   {(predIntervals || intervals).map((i) => <option key={i}>{i}</option>)}
                 </select>
               </div>
-              <button className="btn" onClick={getSignal} disabled={busy || !online}
-                style={{ flex: "1 1 0", minWidth: 0, whiteSpace: "nowrap", padding: "0 20px" }}>
-                {busy ? "Запрос…" : "Запросить прогноз"}
-              </button>
+              <div className="field" style={{ flex: "1 1 0", minWidth: 0, marginBottom: 0 }}>
+                <label style={{ visibility: "hidden" }}>‌</label>
+                <button className="btn" onClick={getSignal} disabled={busy || !online}
+                  style={{ width: "100%", whiteSpace: "nowrap" }}>
+                  {busy ? "Запрос…" : "Запросить прогноз"}
+                </button>
+              </div>
             </div>
             {err ? <div className="error">{err}</div> : null}
           </div>
