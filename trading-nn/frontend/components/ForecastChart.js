@@ -492,7 +492,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               {levelLines.map((l, i) => (
                 nowX != null && (
                   <line key={i} x1={nowX} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
-                        stroke={l.c} strokeWidth="0.9" strokeDasharray="3 5" opacity="0.85" />
+                        stroke={l.c} strokeWidth="1.1" opacity="0.85" />
                 )
               ))}
 
@@ -509,8 +509,8 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                     stroke="var(--line)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
             )}
 
-            {/* Подписи уровней сделки справа */}
-            {levelLines.map((l, i) => (
+            {/* Подписи уровней сделки справа — только когда индикаторы скрыты */}
+            {!showIndicators && levelLines.map((l, i) => (
               <text key={i} x={padL + innerW + 4} y={yv(l.v) + 3.5} fill={l.c}
                     fontSize="9" fontFamily="var(--mono)">{l.k} {fmtN(l.v)}</text>
             ))}
