@@ -898,9 +898,16 @@ def get_actuals(
         if from_time:
             try:
                 dt = pd.Timestamp(from_time)
+                # нормализуем timezone: если индекс tz-aware, а dt — naive, приводим
+                if df.index.tz is not None and dt.tzinfo is None:
+                    dt = dt.tz_localize(df.index.tz)
+                elif df.index.tz is None and dt.tzinfo is not None:
+                    dt = dt.tz_localize(None)
                 df = df[df.index > dt]
             except Exception:
-                pass
+                return {"bars": []}   # не можем фильтровать — лучше ничего не вернуть
+        else:
+            return {"bars": []}       # from_time обязателен
         df = df.head(steps + 1)   # берём чуть больше на случай пропусков
         bars = [
             {
