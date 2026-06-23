@@ -103,13 +103,13 @@ class Config:
 # AUC залипает у 0.5. lookback уменьшен на D1 — мало истории, иначе переобучение.
 TIMEFRAME_PRESETS = {
     "1d": dict(horizon=10, lookback=32, period="6y",
-               tp_atr_mult=1.5, sl_atr_mult=1.0, prob_threshold=0.54,
+               tp_atr_mult=3.0, sl_atr_mult=1.0, prob_threshold=0.54,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
     "4h": dict(horizon=12, lookback=48, period="3y",
-               tp_atr_mult=1.5, sl_atr_mult=1.0, prob_threshold=0.55,
+               tp_atr_mult=2.5, sl_atr_mult=1.0, prob_threshold=0.55,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
     "1h": dict(horizon=24, lookback=64, period="2y",
-               tp_atr_mult=1.5, sl_atr_mult=1.0, prob_threshold=0.56,
+               tp_atr_mult=2.5, sl_atr_mult=1.0, prob_threshold=0.56,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
 }
 

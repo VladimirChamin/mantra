@@ -240,10 +240,17 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   const lastClose  = forecastPrices[forecastPrices.length - 1];
 
   // risk/reward/prob
-  const prob    = levels?.prob_up ?? data.signal?.prob_up;
-  const conf    = levels?.confidence ?? data.signal?.confidence;
-  const rr      = levels?.risk_reward ?? data.signal?.risk_reward;
-  const fwdVol  = data.signal?.exp_vol ?? data.signal?.fwd_vol;
+  const prob      = levels?.prob_up ?? data.signal?.prob_up;
+  const conf      = levels?.confidence ?? data.signal?.confidence;
+  const rr        = levels?.risk_reward ?? data.signal?.risk_reward;
+  const fwdVol    = data.signal?.exp_vol ?? data.signal?.fwd_vol;
+  const orderType = signal?.order_type ?? levels?.order_type ?? null;
+  const orderLabel = orderType
+    ? (orderType === "MARKET" ? "market"
+      : (orderType === "BUYSTOP" || orderType === "SELLSTOP") ? "stop"
+      : (orderType === "LIMIT_BUY" || orderType === "LIMIT_SELL") ? "limit"
+      : null)
+    : null;
   const riskPct = hasTrade && levels?.entry && levels?.stop_loss
     ? Math.abs(levels.stop_loss - levels.entry) / levels.entry : null;
   const rewPct  = hasTrade && levels?.entry && levels?.take_profit
@@ -431,7 +438,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               {/* Уровни сделки */}
               {levelLines.map((l, i) => (
                 <line key={i} x1={nowX} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
-                      stroke={l.c} strokeWidth="0.9" strokeDasharray="3 5" opacity="0.85" />
+                      stroke={l.c} strokeWidth={showIndicators ? "2" : "1.1"} opacity="0.85" />
               ))}
 
               {/* Вертикаль hover */}
@@ -445,8 +452,8 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             <line x1={nowX} y1={padT} x2={nowX} y2={padT + innerH}
                   stroke="var(--line)" strokeWidth="1" strokeDasharray="3 3" opacity="0.7" />
 
-            {/* Подписи уровней сделки справа */}
-            {levelLines.map((l, i) => (
+            {/* Подписи уровней сделки справа — скрыты когда включены индикаторы */}
+            {!showIndicators && levelLines.map((l, i) => (
               <text key={i} x={padL + innerW + 4} y={yv(l.v) + 3.5} fill={l.c}
                     fontSize="9" fontFamily="var(--mono)">{l.k} {fmtN(l.v)}</text>
             ))}
@@ -627,16 +634,32 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
 
           {/* Уровни */}
           {[
-            { label: "Вход", value: levels.entry, color: "var(--text)" },
+            { label: "Вход", value: levels.entry, color: "var(--text)", badge: orderLabel },
             { label: "Тейк-профит", value: levels.take_profit, color: "var(--long)", bg: "rgba(16,185,129,.07)" },
             { label: "Стоп-лосс",   value: levels.stop_loss,   color: "var(--short)", bg: "rgba(239,68,68,.07)" },
-          ].map(({ label, value, color, bg }) => (
+          ].map(({ label, value, color, bg, badge }) => (
             <div key={label} style={{
               padding: "10px 14px",
               borderBottom: "1px solid var(--line-soft)",
               background: bg || "transparent",
             }}>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>{label}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{label}</span>
+                {badge && (
+                  <span style={{
+                    fontSize: 9, fontFamily: "var(--mono)", fontWeight: 700,
+                    padding: "1px 5px", borderRadius: 4,
+                    background: badge === "market" ? "rgba(100,116,139,.15)"
+                              : badge === "stop"   ? "rgba(245,158,11,.15)"
+                              : "rgba(99,102,241,.15)",
+                    color: badge === "market" ? "var(--muted)"
+                         : badge === "stop"   ? "#f59e0b"
+                         : "#6366f1",
+                    border: `1px solid ${badge === "market" ? "var(--line)" : badge === "stop" ? "#f59e0b44" : "#6366f144"}`,
+                    textTransform: "uppercase", letterSpacing: "0.04em",
+                  }}>{badge}</span>
+                )}
+              </div>
               <div style={{ fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color }}>
                 {fmtN(value)}
               </div>

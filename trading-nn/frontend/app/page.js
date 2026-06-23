@@ -1148,18 +1148,18 @@ export default function Dashboard() {
           <div className="card" style={{ marginBottom: 18 }}>
             <h2>Прогноз и сигнал</h2>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
-              <div className="field" style={{ flex: "1 1 160px", minWidth: 120, marginBottom: 0 }}>
+              <div className="field" style={{ flex: "1 1 0", minWidth: 0, marginBottom: 0 }}>
                 <label>Инструмент</label>
                 <SymbolInput value={pred.symbol} instruments={instruments} onChange={handlePredSymbolChange} />
               </div>
-              <div className="field" style={{ flex: "0 0 auto", marginBottom: 0 }}>
+              <div className="field" style={{ flex: "1 1 0", minWidth: 0, marginBottom: 0 }}>
                 <label>Таймфрейм</label>
                 <select value={pred.interval} onChange={(e) => setPred({ ...pred, interval: e.target.value })}>
                   {(predIntervals || intervals).map((i) => <option key={i}>{i}</option>)}
                 </select>
               </div>
               <button className="btn" onClick={getSignal} disabled={busy || !online}
-                style={{ flex: "0 0 auto", whiteSpace: "nowrap", width: "auto", padding: "0 20px" }}>
+                style={{ flex: "1 1 0", minWidth: 0, whiteSpace: "nowrap", padding: "0 20px" }}>
                 {busy ? "Запрос…" : "Запросить прогноз"}
               </button>
             </div>
