@@ -8,7 +8,6 @@ import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
 import EquityChart from "@/components/EquityChart";
 import JobLog from "@/components/JobLog";
-import AIAnalysis from "@/components/AIAnalysis";
 import HistoryPanel from "@/components/HistoryPanel";
 import AdminPanel from "@/components/AdminPanel";
 import Screener from "@/components/Screener";
@@ -1174,30 +1173,6 @@ export default function Dashboard() {
                   <SignalTicket signal={signal} />
                 </>
               )}
-              <div style={{
-                marginTop: 20, paddingTop: 20,
-                borderTop: "1px solid var(--line-soft)",
-              }}>
-                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
-                <AIAnalysis
-                  symbol={pred.symbol}
-                  signal={signal}
-                  quota={aiQuota}
-                  onQuotaUpdate={setAiQuota}
-                />
-              </div>
-            </div>
-          )}
-
-          {!fc && !signal && (
-            <div className="card" style={{ marginBottom: 18 }}>
-              <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
-              <AIAnalysis
-                symbol={pred.symbol}
-                signal={signal}
-                quota={aiQuota}
-                onQuotaUpdate={setAiQuota}
-              />
             </div>
           )}
 
@@ -1215,15 +1190,6 @@ export default function Dashboard() {
                 <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
               </div>
               <ForecastChart data={historyFc} isAdmin={isAdmin} actuals={historyFc.actuals} />
-              <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
-                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
-                <AIAnalysis
-                  symbol={historyFc.symbol}
-                  signal={historyFc.signal}
-                  quota={aiQuota}
-                  onQuotaUpdate={setAiQuota}
-                />
-              </div>
             </div>
           )}
         </>
