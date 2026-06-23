@@ -1176,6 +1176,20 @@ class ActiveModelsReq(BaseModel):
     tags: list[str]
 
 
+@app.get("/api/models/available", tags=["models"])
+def get_available_intervals(symbol: str, current_user: dict = Depends(auth.get_current_user)):
+    """Возвращает список таймфреймов для которых есть модель под данный символ."""
+    active_tags = auth.get_active_models() or None
+    available = []
+    for iv in tn.TIMEFRAME_PRESETS.keys():
+        try:
+            tn.resolve_model_tag(symbol, iv, active_tags=active_tags)
+            available.append(iv)
+        except FileNotFoundError:
+            pass
+    return {"intervals": available}
+
+
 @app.get("/api/active_models", tags=["models"])
 def get_active_models(_=Depends(auth.require_admin)):
     return {"active": auth.get_active_models()}

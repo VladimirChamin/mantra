@@ -264,9 +264,25 @@ export default function Dashboard() {
   const [pred, setPred] = useState({ symbol: "", interval: "1d" });
   const [signal, setSignal] = useState(null);
   const [fc, setFc] = useState(null);
+  const [predIntervals, setPredIntervals] = useState(null); // null = не загружены (показываем все)
 
   const intervals = meta?.intervals || DEFAULT_INTERVALS;
   const instruments = meta?.instruments || [];
+
+  // При смене символа в форме прогноза — загружаем доступные таймфреймы
+  function handlePredSymbolChange(sym) {
+    setPred(p => ({ ...p, symbol: sym }));
+    setPredIntervals(null);
+    if (!sym) return;
+    api.getAvailableIntervals(sym).then(d => {
+      const avail = d.intervals || [];
+      setPredIntervals(avail.length ? avail : null);
+      // если текущий таймфрейм недоступен — берём первый доступный
+      if (avail.length && !avail.includes(pred.interval)) {
+        setPred(p => ({ ...p, interval: avail[0] }));
+      }
+    }).catch(() => setPredIntervals(null));
+  }
 
   // применить пресет таймфрейма к форме обучения
   function setTrainInterval(iv) {
@@ -829,27 +845,6 @@ export default function Dashboard() {
                   }))} />
                 <span>Тёплый старт (дообучить существующую модель)</span>
               </label>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-                <span style={{ fontSize: 13, color: "var(--muted)" }}>Фильтр направления:</span>
-                {[["both", "Long & Short"], ["long", "Только Long"], ["short", "Только Short"]].map(([val, label]) => {
-                  const cur = classTrainParams[activeClass]?.direction_filter || "both";
-                  return (
-                    <button key={val} type="button"
-                      onClick={() => setClassTrainParams(p => ({
-                        ...p, [activeClass]: { ...p[activeClass], direction_filter: val }
-                      }))}
-                      style={{
-                        padding: "5px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
-                        fontFamily: "var(--body)", fontWeight: 500,
-                        border: `1px solid ${cur === val ? (val === "long" ? "var(--long)" : val === "short" ? "var(--short)" : "var(--primary)") : "var(--line)"}`,
-                        background: cur === val ? (val === "long" ? "var(--long-dim)" : val === "short" ? "var(--short-dim)" : "var(--primary)") : "transparent",
-                        color: cur === val ? (val === "long" ? "var(--long)" : val === "short" ? "var(--short)" : "#fff") : "var(--muted)",
-                        transition: "all .15s",
-                      }}
-                    >{label}</button>
-                  );
-                })}
-              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
                 {[["0", "Маркет", "вход по рынку"], ["0.3", "Стоп", "выше/ниже рынка"], ["-0.3", "Лимит", "лучшая цена на откате"]].map(([val, label, hint]) => {
@@ -1153,10 +1148,10 @@ export default function Dashboard() {
           <div className="card" style={{ marginBottom: 18 }}>
             <h2>Прогноз и сигнал</h2>
             <div className="row2" style={{ marginBottom: 12 }}>
-              <Field label="Инструмент"><SymbolInput value={pred.symbol} instruments={instruments} onChange={v => setPred({ ...pred, symbol: v })} /></Field>
+              <Field label="Инструмент"><SymbolInput value={pred.symbol} instruments={instruments} onChange={handlePredSymbolChange} /></Field>
               <Field label="Таймфрейм">
                 <select value={pred.interval} onChange={(e) => setPred({ ...pred, interval: e.target.value })}>
-                  {intervals.map((i) => <option key={i}>{i}</option>)}
+                  {(predIntervals || intervals).map((i) => <option key={i}>{i}</option>)}
                 </select>
               </Field>
             </div>
