@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 
 const fmtN = (n, digits = 2) =>
   typeof n === "number"
@@ -93,6 +93,18 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   function zoomV(factor) {
     setChartH(h => Math.round(Math.min(H_MAX, Math.max(H_MIN, h * factor))));
   }
+
+  // Колесо мыши над графиком — вертикальный зум
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const handler = (e) => {
+      e.preventDefault();
+      zoomV(e.deltaY > 0 ? 0.85 : 1.18);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  });
 
   if (!data || !data.history?.length || !data.forecast?.length) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
