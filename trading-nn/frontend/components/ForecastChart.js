@@ -229,29 +229,18 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     return Math.floor((svgX - padL) / barW) + effectiveVisStart;
   }
 
-  function applyZoom(factor, anchorClientX) {
-    const currentCount = effectiveVisCount;
-    const rawCount = Math.round(currentCount * factor);
-    const newCount = Math.max(5, Math.min(totalBars, rawCount));
-    const idx = anchorClientX != null ? svgXToBarIdx(anchorClientX) : null;
-    const cursorFrac = idx != null ? (idx - effectiveVisStart) / currentCount : 0.5;
-    const newStart = Math.round((idx ?? (effectiveVisStart + currentCount * 0.5)) - cursorFrac * newCount);
-    const clampedStart = Math.max(0, Math.min(newStart, totalBars - newCount));
-    if (newCount >= totalBars) {
-      setVisCount(null);
-      setVisStart(0);
-    } else {
-      setVisCount(newCount);
-      setVisStart(clampedStart);
-    }
-    setHover(null);
-  }
-
   function onWheel(e) {
     e.preventDefault();
-    // deltaY > 0 = прокрутка вниз = zoom out (больше баров), < 0 = zoom in
-    const factor = e.deltaY > 0 ? 1.15 : 0.87;
-    applyZoom(factor, e.clientX);
+    const idx = svgXToBarIdx(e.clientX);
+    const currentCount = effectiveVisCount;
+    const factor = e.deltaY > 0 ? 1.15 : 0.87; // zoom out / in
+    const newCount = Math.round(Math.min(totalBars, Math.max(5, currentCount * factor)));
+    // сохраняем бар под курсором на месте
+    const cursorFrac = idx != null ? (idx - effectiveVisStart) / currentCount : 0.5;
+    const newStart = Math.round((idx ?? effectiveVisStart) - cursorFrac * newCount);
+    setVisCount(newCount);
+    setVisStart(Math.max(0, Math.min(newStart, totalBars - newCount)));
+    setHover(null);
   }
 
   function onMouseDown(e) {
@@ -340,25 +329,15 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               + реальные данные ({actualBars.length} баров)
             </span>
           )}
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-            {/* Zoom controls */}
-            <div style={{ display: "flex", alignItems: "center", border: "1px solid var(--line)", borderRadius: 7, overflow: "hidden" }}>
-              <button onClick={() => applyZoom(0.70, null)} title="Увеличить"
-                style={{ background: "none", border: "none", borderRight: "1px solid var(--line)",
-                         color: "var(--muted-2)", cursor: "pointer", padding: "2px 9px",
-                         fontSize: 13, lineHeight: 1.4, fontFamily: "var(--mono)" }}>+</button>
-              <button onClick={resetZoom} title="Полный вид"
-                style={{ background: isZoomed ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "none",
-                         border: "none", borderRight: "1px solid var(--line)",
-                         color: isZoomed ? "var(--primary)" : "var(--muted-2)", cursor: "pointer",
-                         padding: "2px 8px", fontSize: 10, lineHeight: 1.4, fontFamily: "var(--mono)" }}>
-                {isZoomed ? `${effectiveVisCount}б` : "все"}
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            {isZoomed && (
+              <button onClick={resetZoom} title="Сбросить масштаб"
+                style={{ background: "none", border: "1px solid var(--primary)", borderRadius: 6,
+                         color: "var(--primary)", cursor: "pointer", padding: "2px 9px",
+                         fontSize: 11, fontFamily: "var(--mono)", lineHeight: 1.5 }}>
+                ⟳ сброс
               </button>
-              <button onClick={() => applyZoom(1.40, null)} title="Уменьшить"
-                style={{ background: "none", border: "none",
-                         color: "var(--muted-2)", cursor: "pointer", padding: "2px 9px",
-                         fontSize: 13, lineHeight: 1.4, fontFamily: "var(--mono)" }}>−</button>
-            </div>
+            )}
             {(pl || hasIndicators) && (
               <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
                               fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)", userSelect: "none" }}>
