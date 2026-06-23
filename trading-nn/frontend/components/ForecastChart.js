@@ -358,11 +358,6 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
           </div>
         </div>
 
-        {/* Подсказка управления */}
-        <div style={{ fontSize: 10, color: "var(--muted-2)", fontFamily: "var(--mono)", marginBottom: 4, opacity: 0.6 }}>
-          колесо — масштаб · drag — сдвиг
-        </div>
-
         {/* SVG Graph */}
         <div style={{ position: "relative" }}>
           <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
