@@ -869,6 +869,7 @@ def forecast(
                 "last_price":  result.get("last_price"),
                 "signal":      result.get("signal"),
                 "pivot_levels": result.get("pivot_levels"),
+                "indicators":  result.get("indicators"),
             })
             explanation = sig.get("explanation")
             expl_json = _json.dumps(explanation, ensure_ascii=False) if explanation else None

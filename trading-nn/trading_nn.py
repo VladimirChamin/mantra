@@ -1893,6 +1893,51 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         prev_c = bar_close
 
     hist = df.iloc[-history:]
+
+    # ── Индикаторы для графика (абсолютные цены) ─────────────────────────────
+    _c  = df["close"]
+    _h  = df["high"]
+    _l  = df["low"]
+    _sma10 = _c.rolling(10).mean()
+    _sma20 = _c.rolling(20).mean()
+    _sma50 = _c.rolling(50).mean()
+    _ema12 = _c.ewm(span=12, adjust=False).mean()
+    _ema26 = _c.ewm(span=26, adjust=False).mean()
+    _bb_mid   = _c.rolling(20).mean()
+    _bb_std   = _c.rolling(20).std()
+    _bb_upper = _bb_mid + 2 * _bb_std
+    _bb_lower = _bb_mid - 2 * _bb_std
+    # RSI(14)
+    _delta = _c.diff()
+    _gain  = _delta.clip(lower=0).rolling(14).mean()
+    _loss  = (-_delta.clip(upper=0)).rolling(14).mean()
+    _rsi   = 100 - 100 / (1 + _gain / (_loss + 1e-9))
+    # MACD
+    _macd_line = _c.ewm(span=12, adjust=False).mean() - _c.ewm(span=26, adjust=False).mean()
+    _macd_sig  = _macd_line.ewm(span=9, adjust=False).mean()
+    _macd_hist = _macd_line - _macd_sig
+
+    def _safe(val):
+        return None if (val is None or (hasattr(val, '__float__') and not np.isfinite(float(val)))) else round(float(val), 4)
+
+    indicators = {}
+    for ts, row in hist.iterrows():
+        idx = df.index.get_loc(ts)
+        indicators[str(ts)] = {
+            "sma10":     _safe(_sma10.iloc[idx]),
+            "sma20":     _safe(_sma20.iloc[idx]),
+            "sma50":     _safe(_sma50.iloc[idx]),
+            "ema12":     _safe(_ema12.iloc[idx]),
+            "ema26":     _safe(_ema26.iloc[idx]),
+            "bb_upper":  _safe(_bb_upper.iloc[idx]),
+            "bb_mid":    _safe(_bb_mid.iloc[idx]),
+            "bb_lower":  _safe(_bb_lower.iloc[idx]),
+            "rsi":       _safe(_rsi.iloc[idx]),
+            "macd":      _safe(_macd_line.iloc[idx]),
+            "macd_sig":  _safe(_macd_sig.iloc[idx]),
+            "macd_hist": _safe(_macd_hist.iloc[idx]),
+        }
+
     history_pts = [
         {
             "time":  str(ts),
@@ -1910,6 +1955,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         "last_time": str(df.index[-1]),
         "last_price": round(price0, 2),
         "history": history_pts,
+        "indicators": indicators,
         "forecast": path,
         "pivot_levels": pivot_levels,
         "signal": sig,

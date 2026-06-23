@@ -75,16 +75,21 @@ function resolveStatus(fc, levels) {
   return "open";
 }
 
+function polyline(pts, xBar, yv) {
+  if (!pts.length) return "";
+  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${xBar(p.x).toFixed(1)},${yv(p.v).toFixed(1)}`).join(" ");
+}
+
 export default function ForecastChart({ data, isAdmin, actuals }) {
   const svgRef    = useRef(null);
-  const [showPivots, setShowPivots] = useState(true);
-  const [hover, setHover]           = useState(null); // { i, x, y, bar, isForecast }
+  const [showIndicators, setShowIndicators] = useState(true);
+  const [hover, setHover]                   = useState(null);
 
   if (!data || !data.history?.length || !data.forecast?.length) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
   }
 
-  const { history, forecast, levels, last_price, pivot_levels, symbol, interval, oos_auc, signal } = data;
+  const { history, forecast, levels, last_price, pivot_levels, indicators, symbol, interval, oos_auc, signal } = data;
   const hN = history.length;
   const fN = forecast.length;
   const nowIdx = hN - 1;
@@ -114,11 +119,35 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
   // actuals — реальные бары за период прогноза (могут прийти снаружи)
   const actualBars = actuals || data.actuals || [];
 
+  // Индикаторные ряды для отрисовки (порядок — по истории)
+  const indRows = indicators
+    ? history.map(bar => indicators[bar.time] || null)
+    : history.map(() => null);
+
+  // Ряды для ценового SVG (абсолютные цены)
+  const sma10Pts  = indRows.map((r, i) => r?.sma10  != null ? { x: i, v: r.sma10  } : null).filter(Boolean);
+  const sma20Pts  = indRows.map((r, i) => r?.sma20  != null ? { x: i, v: r.sma20  } : null).filter(Boolean);
+  const sma50Pts  = indRows.map((r, i) => r?.sma50  != null ? { x: i, v: r.sma50  } : null).filter(Boolean);
+  const ema12Pts  = indRows.map((r, i) => r?.ema12  != null ? { x: i, v: r.ema12  } : null).filter(Boolean);
+  const ema26Pts  = indRows.map((r, i) => r?.ema26  != null ? { x: i, v: r.ema26  } : null).filter(Boolean);
+  const bbUPts    = indRows.map((r, i) => r?.bb_upper != null ? { x: i, v: r.bb_upper } : null).filter(Boolean);
+  const bbMPts    = indRows.map((r, i) => r?.bb_mid   != null ? { x: i, v: r.bb_mid   } : null).filter(Boolean);
+  const bbLPts    = indRows.map((r, i) => r?.bb_lower != null ? { x: i, v: r.bb_lower } : null).filter(Boolean);
+  // RSI и MACD — отдельные панели
+  const rsiPts    = indRows.map((r, i) => r?.rsi      != null ? { x: i, v: r.rsi      } : null).filter(Boolean);
+  const macdPts   = indRows.map((r, i) => r?.macd     != null ? { x: i, v: r.macd     } : null).filter(Boolean);
+  const macdSPts  = indRows.map((r, i) => r?.macd_sig != null ? { x: i, v: r.macd_sig } : null).filter(Boolean);
+  const macdHPts  = indRows.map((r, i) => r?.macd_hist!= null ? { x: i, v: r.macd_hist} : null).filter(Boolean);
+
+  const hasIndicators = indicators && Object.keys(indicators).length > 0;
+
   const vals = [
     ...history.map(c => c.high), ...history.map(c => c.low),
     ...forecast.map(p => forecastHasOHLC ? p.high : (p.upper ?? p.mid)),
     ...forecast.map(p => forecastHasOHLC ? p.low  : (p.lower ?? p.mid)),
-    ...(showPivots ? pivotLines.map(l => l.v) : []),
+    ...(showIndicators ? pivotLines.map(l => l.v) : []),
+    ...(showIndicators ? bbUPts.map(p => p.v) : []),
+    ...(showIndicators ? bbLPts.map(p => p.v) : []),
     ...actualBars.map(b => b.high),
     ...actualBars.map(b => b.low),
   ];
@@ -222,12 +251,12 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             </span>
           )}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-            {pl && (
+            {(pl || hasIndicators) && (
               <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
                               fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)", userSelect: "none" }}>
-                <input type="checkbox" checked={showPivots} onChange={e => setShowPivots(e.target.checked)}
+                <input type="checkbox" checked={showIndicators} onChange={e => setShowIndicators(e.target.checked)}
                        style={{ accentColor: "var(--primary)", cursor: "pointer" }} />
-                Pivot
+                Индикаторы
               </label>
             )}
             {isAdmin && (
@@ -270,11 +299,31 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                     fill={accentColor} opacity="0.05" />
 
               {/* Pivot Points */}
-              {showPivots && pivotLines.map(l => (
+              {showIndicators && pivotLines.map(l => (
                 <line key={l.k} x1={padL} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
                       stroke={l.c} strokeWidth={l.k === "PP" ? 1.2 : 0.8}
                       strokeDasharray={l.dash} opacity="0.5" />
               ))}
+
+              {/* Индикаторы — линии на ценовом графике */}
+              {showIndicators && hasIndicators && (<>
+                {/* Bollinger Bands — полупрозрачная заливка */}
+                {bbUPts.length > 1 && bbLPts.length > 1 && (
+                  <path
+                    d={`${polyline(bbUPts, xBar, yv)} L${xBar(bbLPts[bbLPts.length-1].x).toFixed(1)},${yv(bbLPts[bbLPts.length-1].v).toFixed(1)} ${[...bbLPts].reverse().map((p,i)=>`${i===0?"":"L"}${xBar(p.x).toFixed(1)},${yv(p.v).toFixed(1)}`).join(" ")} Z`}
+                    fill="#6366f1" fillOpacity="0.06" stroke="none" />
+                )}
+                {bbUPts.length > 1 && <path d={polyline(bbUPts, xBar, yv)} fill="none" stroke="#6366f1" strokeWidth="0.8" opacity="0.45" strokeDasharray="3 3" />}
+                {bbMPts.length > 1 && <path d={polyline(bbMPts, xBar, yv)} fill="none" stroke="#6366f1" strokeWidth="0.7" opacity="0.35" strokeDasharray="2 4" />}
+                {bbLPts.length > 1 && <path d={polyline(bbLPts, xBar, yv)} fill="none" stroke="#6366f1" strokeWidth="0.8" opacity="0.45" strokeDasharray="3 3" />}
+                {/* SMA */}
+                {sma10Pts.length > 1 && <path d={polyline(sma10Pts, xBar, yv)} fill="none" stroke="#f59e0b" strokeWidth="1.1" opacity="0.75" />}
+                {sma20Pts.length > 1 && <path d={polyline(sma20Pts, xBar, yv)} fill="none" stroke="#10b981" strokeWidth="1.1" opacity="0.75" />}
+                {sma50Pts.length > 1 && <path d={polyline(sma50Pts, xBar, yv)} fill="none" stroke="#ef4444" strokeWidth="1.2" opacity="0.65" />}
+                {/* EMA */}
+                {ema12Pts.length > 1 && <path d={polyline(ema12Pts, xBar, yv)} fill="none" stroke="#f59e0b" strokeWidth="0.7" opacity="0.45" strokeDasharray="4 2" />}
+                {ema26Pts.length > 1 && <path d={polyline(ema26Pts, xBar, yv)} fill="none" stroke="#10b981" strokeWidth="0.7" opacity="0.45" strokeDasharray="4 2" />}
+              </>)}
 
               {/* Исторические свечи */}
               {candles.map((c, i) => {
@@ -367,7 +416,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
               <text key={i} x={padL + innerW + 4} y={yv(l.v) + 3.5} fill={l.c}
                     fontSize="9" fontFamily="var(--mono)">{l.k} {fmtN(l.v)}</text>
             ))}
-            {showPivots && pivotLines.map(l => (
+            {showIndicators && pivotLines.map(l => (
               <text key={l.k} x={padL + innerW + 4} y={yv(l.v) + 3.5}
                     fill={l.c} fontSize="8" fontFamily="var(--mono)" opacity="0.8">
                 {l.k} {fmtN(l.v)}
@@ -410,6 +459,109 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             })()}
           </svg>
         </div>
+
+        {/* ── Мини-панели индикаторов ── */}
+        {showIndicators && hasIndicators && (() => {
+          const PW = 800, pH = 60, pPadL = 8, pPadR = 88, pPadT = 8, pPadB = 10;
+          const pInnerW = PW - pPadL - pPadR;
+          const pInnerH = pH - pPadT - pPadB;
+          const pxBar = (i) => pPadL + (i + 0.5) * (pInnerW / hN);
+
+          // RSI panel
+          const rsiMin = 0, rsiMax = 100;
+          const ry = (v) => pPadT + (1 - (v - rsiMin) / (rsiMax - rsiMin)) * pInnerH;
+          const rsiPath = rsiPts.length > 1
+            ? rsiPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${ry(p.v).toFixed(1)}`).join(" ")
+            : "";
+
+          // MACD panel
+          const macdVals = [...macdPts.map(p => p.v), ...macdSPts.map(p => p.v), ...macdHPts.map(p => p.v)];
+          const macdMin = macdVals.length ? Math.min(...macdVals) : -1;
+          const macdMax = macdVals.length ? Math.max(...macdVals) :  1;
+          const mRange = (macdMax - macdMin) || 0.001;
+          const my = (v) => pPadT + (1 - (v - macdMin) / mRange) * pInnerH;
+          const my0 = my(Math.max(macdMin, Math.min(macdMax, 0)));
+          const macdPath = macdPts.length > 1
+            ? macdPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${my(p.v).toFixed(1)}`).join(" ")
+            : "";
+          const macdSPath = macdSPts.length > 1
+            ? macdSPts.map((p, i) => `${i === 0 ? "M" : "L"}${pxBar(p.x).toFixed(1)},${my(p.v).toFixed(1)}`).join(" ")
+            : "";
+
+          return (
+            <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+              {/* RSI */}
+              {rsiPts.length > 1 && (
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: "var(--muted-2)", fontFamily: "var(--mono)", marginBottom: 2 }}>RSI(14)</div>
+                  <svg viewBox={`0 0 ${PW} ${pH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", width: "100%" }}>
+                    <rect x={pPadL} y={pPadT} width={pInnerW} height={pInnerH} fill="none" stroke="var(--line)" strokeWidth="0.5" opacity="0.4" />
+                    {/* зоны */}
+                    <line x1={pPadL} y1={ry(70)} x2={pPadL+pInnerW} y2={ry(70)} stroke="#ef4444" strokeWidth="0.6" strokeDasharray="3 3" opacity="0.5" />
+                    <line x1={pPadL} y1={ry(50)} x2={pPadL+pInnerW} y2={ry(50)} stroke="var(--muted-2)" strokeWidth="0.5" strokeDasharray="2 4" opacity="0.4" />
+                    <line x1={pPadL} y1={ry(30)} x2={pPadL+pInnerW} y2={ry(30)} stroke="#10b981" strokeWidth="0.6" strokeDasharray="3 3" opacity="0.5" />
+                    {rsiPath && <path d={rsiPath} fill="none" stroke="#a78bfa" strokeWidth="1.2" />}
+                    <text x={pPadL+pInnerW+4} y={ry(70)+3} fill="#ef4444" fontSize="7" fontFamily="var(--mono)">70</text>
+                    <text x={pPadL+pInnerW+4} y={ry(30)+3} fill="#10b981" fontSize="7" fontFamily="var(--mono)">30</text>
+                    {rsiPts.length > 0 && (
+                      <text x={pPadL+pInnerW+4} y={pPadT+pInnerH/2+3} fill="#a78bfa" fontSize="7" fontFamily="var(--mono)">
+                        {rsiPts[rsiPts.length-1].v.toFixed(0)}
+                      </text>
+                    )}
+                  </svg>
+                </div>
+              )}
+              {/* MACD */}
+              {macdPts.length > 1 && (
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: "var(--muted-2)", fontFamily: "var(--mono)", marginBottom: 2 }}>MACD(12,26,9)</div>
+                  <svg viewBox={`0 0 ${PW} ${pH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", width: "100%" }}>
+                    <rect x={pPadL} y={pPadT} width={pInnerW} height={pInnerH} fill="none" stroke="var(--line)" strokeWidth="0.5" opacity="0.4" />
+                    <line x1={pPadL} y1={my0} x2={pPadL+pInnerW} y2={my0} stroke="var(--muted-2)" strokeWidth="0.6" opacity="0.4" />
+                    {/* гистограмма */}
+                    {macdHPts.map((p, i) => {
+                      const bx = pxBar(p.x);
+                      const bw = Math.max((pInnerW / hN) * 0.6, 1);
+                      const top = Math.min(my0, my(p.v));
+                      const ht  = Math.abs(my0 - my(p.v)) || 1;
+                      return <rect key={i} x={bx - bw/2} y={top} width={bw} height={ht}
+                                   fill={p.v >= 0 ? "#10b981" : "#ef4444"} opacity="0.5" />;
+                    })}
+                    {macdPath  && <path d={macdPath}  fill="none" stroke="#60a5fa" strokeWidth="1.1" />}
+                    {macdSPath && <path d={macdSPath} fill="none" stroke="#f97316" strokeWidth="0.9" strokeDasharray="3 2" />}
+                  </svg>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Легенда индикаторов */}
+        {showIndicators && hasIndicators && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 6 }}>
+            {[
+              { label: "SMA10", color: "#f59e0b" },
+              { label: "SMA20", color: "#10b981" },
+              { label: "SMA50", color: "#ef4444" },
+              { label: "EMA12", color: "#f59e0b", dash: true },
+              { label: "EMA26", color: "#10b981", dash: true },
+              { label: "BB", color: "#6366f1" },
+            ].map(({ label, color, dash }) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <svg width="18" height="8"><line x1="0" y1="4" x2="18" y2="4" stroke={color} strokeWidth={dash ? 1 : 1.5} strokeDasharray={dash ? "4 2" : "none"} /></svg>
+                <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted-2)" }}>{label}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <svg width="18" height="8"><line x1="0" y1="4" x2="18" y2="4" stroke="#a78bfa" strokeWidth="1.5" /></svg>
+              <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted-2)" }}>RSI</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <svg width="18" height="8"><line x1="0" y1="4" x2="18" y2="4" stroke="#60a5fa" strokeWidth="1.5" /></svg>
+              <span style={{ fontSize: 10, fontFamily: "var(--mono)", color: "var(--muted-2)" }}>MACD</span>
+            </div>
+          </div>
+        )}
 
         {/* OOS AUC */}
         {oos_auc != null && (
