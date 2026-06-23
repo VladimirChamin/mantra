@@ -1182,7 +1182,6 @@ export default function Dashboard() {
                 </>
               )}
               <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
-                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
                 <AIAnalysis
                   symbol={pred.symbol}
                   signal={signal}
@@ -1209,7 +1208,6 @@ export default function Dashboard() {
               </div>
               <ForecastChart data={historyFc} isAdmin={isAdmin} actuals={historyFc.actuals} />
               <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
-                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
                 <AIAnalysis
                   symbol={historyFc.symbol}
                   signal={historyFc.signal}
