@@ -142,6 +142,146 @@ function TrainingChart({ data }) {
   );
 }
 
+function WalkForwardLiveChart({ data }) {
+  if (!data || data.length === 0) return null;
+
+  const W = 560, H = 130, pL = 42, pR = 8, pT = 10, pB = 22;
+  const iW = W - pL - pR;
+  const iH = H - pT - pB;
+
+  const total   = data[data.length - 1]?.total || data.length;
+  const xOf     = (fold) => pL + ((fold - 1) / Math.max(total - 1, 1)) * iW;
+
+  const retVals = data.map(d => d.total_return);
+  const ddVals  = data.map(d => d.max_drawdown);
+  const pfVals  = data.map(d => d.profit_factor);
+
+  const retMin = Math.min(0, ...retVals), retMax = Math.max(0, ...retVals);
+  const pfMin  = Math.min(...pfVals),      pfMax  = Math.max(...pfVals);
+
+  const retRange = retMax - retMin || 1;
+  const pfRange  = pfMax - pfMin   || 1;
+
+  const yRet = (v) => pT + (1 - (v - retMin) / retRange) * iH;
+  const yPf  = (v) => pT + (1 - (v - pfMin)  / pfRange)  * iH;
+  const yZero = yRet(0);
+
+  const polyRet = data.map(d => `${xOf(d.fold)},${yRet(d.total_return)}`).join(" ");
+  const polyPf  = data.map(d => `${xOf(d.fold)},${yPf(d.profit_factor)}`).join(" ");
+
+  // гистограммы доходности (бары)
+  const barW = Math.max(iW / total * 0.6, 2);
+  const last = data[data.length - 1];
+  const fmt1 = (v) => v != null ? v.toFixed(1) : "—";
+  const fmt2 = (v) => v != null ? v.toFixed(2) : "—";
+
+  // Y-засечки доходности
+  const retTicks = [retMin, 0, retMax].filter((v, i, a) => a.indexOf(v) === i);
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      {/* Легенда + текущие значения */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 6,
+                    fontSize: 11, fontFamily: "var(--mono)", color: "var(--muted-2)", flexWrap: "wrap" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <svg width="18" height="3"><line x1="0" y1="1.5" x2="18" y2="1.5" stroke="var(--primary)" strokeWidth="2"/></svg>
+          доходность %
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <svg width="18" height="3"><line x1="0" y1="1.5" x2="18" y2="1.5" stroke="var(--amber,#f59e0b)" strokeWidth="2" strokeDasharray="3 2"/></svg>
+          profit factor
+        </span>
+        {last && (
+          <>
+            <span style={{ color: last.total_return >= 0 ? "var(--long)" : "var(--short)" }}>
+              фолд {last.fold}/{last.total} · доход={last.total_return >= 0 ? "+" : ""}{fmt1(last.total_return)}%
+            </span>
+            <span>PF={fmt2(last.profit_factor)}</span>
+            <span>WR={fmt1(last.win_rate)}%</span>
+            <span>сделок={last.n_trades}</span>
+          </>
+        )}
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ display: "block", width: "100%", maxWidth: W }}>
+        {/* фон */}
+        <rect x={pL} y={pT} width={iW} height={iH} fill="var(--ink-2)" rx="3" opacity="0.5" />
+
+        {/* горизонтальные засечки доходности */}
+        {retTicks.map((v, i) => {
+          const yy = yRet(v);
+          if (yy < pT || yy > pT + iH) return null;
+          return (
+            <g key={i}>
+              <line x1={pL} y1={yy} x2={pL + iW} y2={yy}
+                    stroke={v === 0 ? "var(--line)" : "var(--line)"}
+                    strokeWidth={v === 0 ? 1 : 0.5} opacity={v === 0 ? 0.8 : 0.4}
+                    strokeDasharray={v === 0 ? "none" : "2 3"} />
+              <text x={pL - 3} y={yy + 3.5} textAnchor="end"
+                    fill={v === 0 ? "var(--text)" : "var(--muted-2)"}
+                    fontSize="8" fontFamily="var(--mono)">
+                {v >= 0 ? "+" : ""}{fmt1(v)}%
+              </text>
+            </g>
+          );
+        })}
+
+        {/* X-ось: номера фолдов */}
+        {data.map(d => (
+          <text key={d.fold} x={xOf(d.fold)} y={H - 5} textAnchor="middle"
+                fill="var(--muted-2)" fontSize="8" fontFamily="var(--mono)">
+            {d.fold}
+          </text>
+        ))}
+
+        {/* Бары доходности */}
+        {data.map(d => {
+          const isPos = d.total_return >= 0;
+          const barTop    = isPos ? yRet(d.total_return) : yZero;
+          const barBottom = isPos ? yZero : yRet(d.total_return);
+          const barH = Math.max(barBottom - barTop, 1);
+          return (
+            <rect key={d.fold}
+              x={xOf(d.fold) - barW / 2} y={barTop}
+              width={barW} height={barH}
+              fill={isPos ? "var(--long)" : "var(--short)"}
+              opacity="0.35" rx="1" />
+          );
+        })}
+
+        {/* Линия нуля */}
+        {yZero >= pT && yZero <= pT + iH && (
+          <line x1={pL} y1={yZero} x2={pL + iW} y2={yZero}
+                stroke="var(--text)" strokeWidth="0.7" opacity="0.5" />
+        )}
+
+        {/* Кривая доходности */}
+        {data.length > 1 && (
+          <polyline points={polyRet} fill="none"
+                    stroke="var(--primary)" strokeWidth="1.8" opacity="0.9" />
+        )}
+
+        {/* Кривая Profit Factor (правая ось, пунктир) */}
+        {data.length > 1 && (
+          <polyline points={polyPf} fill="none"
+                    stroke="var(--amber,#f59e0b)" strokeWidth="1.2"
+                    strokeDasharray="3 2" opacity="0.75" />
+        )}
+
+        {/* Точка последнего фолда */}
+        {last && (
+          <>
+            <circle cx={xOf(last.fold)} cy={yRet(last.total_return)} r="3"
+                    fill={last.total_return >= 0 ? "var(--long)" : "var(--short)"} />
+            <circle cx={xOf(last.fold)} cy={yPf(last.profit_factor)} r="2.5"
+                    fill="var(--amber,#f59e0b)" />
+          </>
+        )}
+      </svg>
+    </div>
+  );
+}
+
 export default function JobLog({ job }) {
   if (!job) return null;
   const pct = Math.round((job.progress || 0) * 100);
@@ -154,7 +294,8 @@ export default function JobLog({ job }) {
     return "";
   };
 
-  const showChart = (job.kind === "train" || job.kind === "train_universal") && job.epoch_data?.length > 0;
+  const showChart   = (job.kind === "train" || job.kind === "train_universal") && job.epoch_data?.length > 0;
+  const showWfChart = job.kind === "backtest" && job.fold_data?.length > 0;
 
   // Для train_universal — парсим статусы инструментов из логов
   const symbolStatuses = (() => {
@@ -228,7 +369,8 @@ export default function JobLog({ job }) {
         </div>
       )}
 
-      {showChart && <TrainingChart data={job.epoch_data} />}
+      {showChart   && <TrainingChart data={job.epoch_data} />}
+      {showWfChart && <WalkForwardLiveChart data={job.fold_data} />}
 
       <div className="log-lines">
         {(job.logs || []).slice(-40).map((l, i) => (

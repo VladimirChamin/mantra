@@ -170,7 +170,7 @@ def _google_news(query: str) -> list[dict]:
         "q":    query,
         "num":  NEWS_COUNT,
         "sort": "date",
-        "dateRestrict": "d7",    # за последние 7 дней
+        "dateRestrict": "y1",    # за последний год
         "lr": "lang_ru|lang_en",
     }
     try:

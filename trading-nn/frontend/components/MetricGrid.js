@@ -27,6 +27,11 @@ export default function MetricGrid({ overall }) {
       <Metric k="Доходность" v={pct(overall.total_return)} tone={signTone(overall.total_return)} />
       <Metric k="Sharpe (сделка)" v={overall.sharpe} tone={signTone(overall.sharpe)} />
       <Metric k="Макс. просадка" v={pct(overall.max_drawdown)} tone="neg" />
+      <Metric
+        k="Recovery Factor"
+        v={overall.recovery_factor != null ? overall.recovery_factor.toFixed(2) : "—"}
+        tone={overall.recovery_factor >= 2 ? "pos" : overall.recovery_factor >= 1 ? "" : "neg"}
+      />
       <Metric k="Ожидание" v={pct(overall.expectancy)} tone={signTone(overall.expectancy)} />
       <Metric k="Ср. убыток" v={pct(overall.avg_loss || 0)} tone="neg" />
     </div>

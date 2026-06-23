@@ -138,6 +138,9 @@ def _metrics(returns: list[float]) -> dict:
     equity = np.cumprod(1 + r)
     peak = np.maximum.accumulate(equity)
     dd = (equity - peak) / peak
+    total_ret = float(equity[-1] - 1)
+    max_dd    = float(dd.min())
+    recovery  = round(total_ret / (abs(max_dd) + 1e-9), 3)
     return {
         "n_trades": int(len(r)),
         "win_rate": round(float(len(wins) / len(r)), 4),
@@ -145,9 +148,10 @@ def _metrics(returns: list[float]) -> dict:
         "avg_loss": round(float(losses.mean()) if len(losses) else 0, 5),
         "profit_factor": round(float(gross_profit / (gross_loss + 1e-9)), 3),
         "expectancy": round(float(r.mean()), 5),
-        "total_return": round(float(equity[-1] - 1), 4),
-        "sharpe": round(float(r.mean() / (r.std() + 1e-9)), 3),  # на сделку
-        "max_drawdown": round(float(dd.min()), 4),
+        "total_return": round(total_ret, 4),
+        "sharpe": round(float(r.mean() / (r.std() + 1e-9)), 3),
+        "max_drawdown": round(max_dd, 4),
+        "recovery_factor": recovery,
     }
 
 
@@ -156,7 +160,12 @@ def _metrics(returns: list[float]) -> dict:
 # =============================================================================
 def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
                  anchored=False, commission=0.0005, slippage=0.0005,
-                 df: pd.DataFrame | None = None, on_progress=None) -> dict:
+                 df: pd.DataFrame | None = None, on_progress=None,
+                 on_fold=None) -> dict:
+    """
+    on_fold(fold_idx, total_folds, metrics_dict) — вызывается после каждого фолда
+    с готовыми метриками. Используется для live-графика доходности.
+    """
     """
     anchored=False  -> скользящее окно (train фиксированной длины)
     anchored=True   -> расширяющееся окно (train растёт от начала)
@@ -220,7 +229,7 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
         # сигналы на тестовом отрезке
         Xte, end_te = _make_sequences(X_scaled, row_ok, L, tr_e, te_e)
         if on_progress:
-            cancelled = on_progress((fi + 0.5) / len(folds), f"Фолд {fi + 1}/{len(folds)}: тест")
+            cancelled = on_progress((fi + 0.5) / len(folds), f"Фолд {fi + 1}/{len(folds)}: прогон теста…")
             if cancelled:
                 break
         if len(Xte) == 0:
@@ -259,6 +268,24 @@ def walk_forward(cfg: tn.Config, train_bars=3000, test_bars=500, epochs=15,
         fr["train_range"] = [str(prices["index"][tr_s]), str(prices["index"][tr_e - 1])]
         fr["test_range"] = [str(prices["index"][tr_e]), str(prices["index"][te_e - 1])]
         fold_reports.append(fr)
+
+        if on_fold:
+            on_fold(fi + 1, len(folds), fr)
+
+        if on_progress:
+            n_tr = fr.get("n_trades", 0)
+            pnl  = fr.get("total_return", 0.0)
+            wr   = fr.get("win_rate", 0.0)
+            pf   = fr.get("profit_factor", 0.0)
+            _pf_str = f"{pf:.2f}" if pf is not None and pf < 9999 else "∞"
+            cancelled = on_progress(
+                (fi + 1) / len(folds),
+                f"Фолд {fi + 1}/{len(folds)}: тест завершён | "
+                f"сделок={n_tr} доходность={pnl*100:+.2f}% "
+                f"WR={wr*100:.0f}% PF={_pf_str}"
+            )
+            if cancelled:
+                break
 
     overall = _metrics(all_returns)
     if on_progress:

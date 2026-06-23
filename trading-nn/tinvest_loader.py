@@ -39,22 +39,29 @@ _BASE            = "https://invest-public-api.tinkoff.ru/rest"
 _INSTRUMENTS_URL = f"{_BASE}/tinkoff.public.invest.api.contract.v1.InstrumentsService"
 _MARKET_URL      = f"{_BASE}/tinkoff.public.invest.api.contract.v1.MarketDataService"
 
-_CONNECT_TIMEOUT = 15   # секунд на установку соединения
+_CONNECT_TIMEOUT = 10   # секунд на установку соединения
 _READ_TIMEOUT    = 60   # секунд на чтение ответа
+
+# Прокси для обхода гео-блокировок: задайте через переменную окружения
+# Пример: TINVEST_PROXY=socks5://user:pass@1.2.3.4:1080
+#         TINVEST_PROXY=http://1.2.3.4:3128
+_PROXY = os.environ.get("TINVEST_PROXY", "").strip() or None
 
 
 def _session() -> requests.Session:
     """Session с автоматическим retry на сетевые ошибки и 5xx."""
     s = requests.Session()
     retry = Retry(
-        total=4,
-        backoff_factor=1.5,          # паузы: 1.5, 3, 6, 12 с
+        total=3,
+        backoff_factor=2.0,          # паузы: 2, 4, 8 с
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods={"POST"},
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)
     s.mount("https://", adapter)
+    if _PROXY:
+        s.proxies = {"https": _PROXY, "http": _PROXY}
     return s
 
 

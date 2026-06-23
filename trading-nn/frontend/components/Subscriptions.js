@@ -12,7 +12,6 @@ const SYMBOLS = [
 const INTERVALS = [
   { v: "1d", l: "1D — дневной" },
   { v: "4h", l: "4H — четырёхчасовой" },
-  { v: "1h", l: "1H — часовой" },
 ];
 const CHANNELS = [
   { v: "telegram", l: "Telegram" },
