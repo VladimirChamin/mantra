@@ -166,62 +166,6 @@ def _update_last_signal(sub_id: int, direction: str):
 
 
 # ---------------------------------------------------------------------------
-# Расписание переобучения
-# ---------------------------------------------------------------------------
-def get_retrain_schedules() -> list[dict]:
-    with _con() as con:
-        rows = con.execute("SELECT * FROM retrain_schedules ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
-
-
-def save_retrain_schedules(schedules: list[dict]) -> None:
-    with _con() as con:
-        for sc in schedules:
-            existing = con.execute(
-                "SELECT id FROM retrain_schedules WHERE interval=?", (sc["interval"],)
-            ).fetchone()
-            if existing:
-                con.execute("""
-                    UPDATE retrain_schedules
-                    SET freq=?, time=?, time2=?, day_of_week=?, updated_at=datetime('now')
-                    WHERE interval=?
-                """, (sc.get("freq","weekly"), sc.get("time","02:00"),
-                      sc.get("time2"), sc.get("day_of_week", 6), sc["interval"]))
-            else:
-                con.execute("""
-                    INSERT INTO retrain_schedules (interval, freq, time, time2, day_of_week)
-                    VALUES (?,?,?,?,?)
-                """, (sc["interval"], sc.get("freq","weekly"), sc.get("time","02:00"),
-                      sc.get("time2"), sc.get("day_of_week",6)))
-        con.commit()
-
-
-def log_retrain(interval: str, status: str, triggered_by: str, job_id: str = None,
-                asset_class: str = None, symbols: str = None) -> int:
-    with _con() as con:
-        cur = con.execute("""
-            INSERT INTO retrain_history (interval, status, triggered_by, job_id, asset_class, symbols)
-            VALUES (?,?,?,?,?,?)
-        """, (interval, status, triggered_by, job_id, asset_class, symbols))
-        con.commit()
-        return cur.lastrowid
-
-
-def update_retrain_status(history_id: int, status: str):
-    with _con() as con:
-        con.execute("UPDATE retrain_history SET status=? WHERE id=?", (status, history_id))
-        con.commit()
-
-
-def get_retrain_history(limit: int = 50) -> list[dict]:
-    with _con() as con:
-        rows = con.execute(
-            "SELECT * FROM retrain_history ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
 # Уведомления
 # ---------------------------------------------------------------------------
 def _send_telegram(chat_id: str, message: str) -> None:

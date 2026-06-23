@@ -13,7 +13,6 @@ import HistoryPanel from "@/components/HistoryPanel";
 import AdminPanel from "@/components/AdminPanel";
 import Screener from "@/components/Screener";
 import Subscriptions from "@/components/Subscriptions";
-import RetrainingPanel from "@/components/RetrainingPanel";
 import ModelMetrics from "@/components/ModelMetrics";
 import FeatureEditor from "@/components/FeatureEditor";
 import SymbolInput from "@/components/SymbolInput";
@@ -534,7 +533,6 @@ export default function Dashboard() {
   const adminSubTabs = [
     ["classes", "Обучение"],
     ["backtest", "Walk-forward"],
-    ["retrain", "Расписание"],
     ["metrics", "Нейросети"],
   ];
 
@@ -1139,10 +1137,6 @@ export default function Dashboard() {
 
       {tab === "subscriptions" && (
         <Subscriptions />
-      )}
-
-      {tab === "retrain" && isAdmin && (
-        <RetrainingPanel />
       )}
 
       {tab === "metrics" && isAdmin && (

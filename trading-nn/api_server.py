@@ -86,13 +86,10 @@ _STATE = {"data_source": "auto"}
 # Монитор качества моделей (AUC watchdog)
 # =============================================================================
 _AUC_MONITOR = {
-    "enabled":          False,
-    "interval_hours":   6,          # как часто проверять
-    "warn_threshold":   tn.AUC_THRESHOLD_WARN,      # 0.54 — жёлтый
-    "retrain_threshold": tn.AUC_THRESHOLD_RETRAIN,  # 0.52 — красный + retrain
-    "auto_retrain":     True,
-    "last_check":       None,
-    "last_triggered":   [],         # теги моделей, которые были дообучены
+    "enabled":        False,
+    "interval_hours": 6,
+    "warn_threshold": tn.AUC_THRESHOLD_WARN,
+    "last_check":     None,
 }
 _AUC_MONITOR_LOCK = threading.Lock()
 _AUC_MONITOR_THREAD: threading.Thread | None = None
@@ -116,40 +113,20 @@ def _auc_monitor_loop():
 
 
 def _run_auc_check(cfg: dict | None = None):
-    """Пересчитывает AUC всех моделей и запускает retrain для упавших."""
+    """Пересчитывает AUC всех моделей."""
     if cfg is None:
         with _AUC_MONITOR_LOCK:
             cfg = dict(_AUC_MONITOR)
 
-    triggered = []
     all_metrics = tn.get_all_metrics()
     for m in all_metrics:
         tag = m["tag"]
         try:
-            fresh = tn.refresh_model_metrics(tag)
-            auc   = fresh.get("val_auc")
-            if auc is None:
-                continue
-
+            tn.refresh_model_metrics(tag)
             with _AUC_MONITOR_LOCK:
                 _AUC_MONITOR["last_check"] = datetime.now().isoformat(timespec="seconds")
-
-            if cfg["auto_retrain"] and auc < cfg["retrain_threshold"]:
-                # запускаем дообучение как фоновую задачу
-                parts = tag.rsplit("_", 1)
-                if len(parts) == 2:
-                    symbol, interval = parts
-                    req = TrainReq(symbol=symbol, interval=interval, warm_start=True, epochs=40)
-                    jid = JOBS.create("train", req.model_dump())
-                    _run_async(_do_train, jid, req)
-                    triggered.append({"tag": tag, "auc": auc, "job_id": jid})
-                    print(f"[auc_monitor] AUC {tag}={auc:.4f} < {cfg['retrain_threshold']} → retrain jid={jid}")
         except Exception as e:
             print(f"[auc_monitor] {tag}: {e}")
-
-    if triggered:
-        with _AUC_MONITOR_LOCK:
-            _AUC_MONITOR["last_triggered"] = triggered
 
 
 def _ensure_monitor_thread():
@@ -1117,68 +1094,6 @@ def update_subscription(sub_id: int, req: SubscriptionReq, current_user: dict = 
 
 
 # =============================================================================
-# Расписание переобучения (admin)
-# =============================================================================
-class RetrainSchedulesReq(BaseModel):
-    schedules: list[dict]
-
-
-class RetrainTriggerReq(BaseModel):
-    interval: str = "1d"
-    asset_class: Optional[str] = None
-
-
-@app.get("/api/retrain/schedules", tags=["retrain"])
-def get_retrain_schedules(_=Depends(auth.require_admin)):
-    return {"schedules": subs_mod.get_retrain_schedules()}
-
-
-@app.post("/api/retrain/schedules", tags=["retrain"])
-def save_retrain_schedules(req: RetrainSchedulesReq, _=Depends(auth.require_admin)):
-    subs_mod.save_retrain_schedules(req.schedules)
-    return {"ok": True}
-
-
-@app.get("/api/retrain/history", tags=["retrain"])
-def retrain_history(_=Depends(auth.require_admin)):
-    return {"history": subs_mod.get_retrain_history()}
-
-
-@app.post("/api/retrain/trigger", tags=["retrain"])
-def trigger_retrain(req: RetrainTriggerReq, _=Depends(auth.require_admin)):
-    """Немедленно запускает переобучение модели для заданного таймфрейма."""
-    interval = req.interval
-    asset_class = req.asset_class or "stocks"
-
-    # Берём символы из ASSET_CLASS_META
-    meta = tn.ASSET_CLASS_META.get(asset_class.lower(), {})
-    symbols = meta.get("default_symbols", [])
-    symbols_str = " ".join(symbols) if symbols else asset_class
-
-    train_req = TrainUniversalReq(
-        symbols=symbols,
-        asset_class=asset_class,
-        interval=interval,
-        epochs=20,
-    )
-    jid = JOBS.create("train_universal", train_req.model_dump())
-
-    history_id = subs_mod.log_retrain(
-        interval=interval, status="running",
-        triggered_by="manual", job_id=jid,
-        asset_class=asset_class, symbols=symbols_str
-    )
-
-    def _wrapped():
-        _do_train_universal(jid, train_req)
-        final_status = JOBS.get(jid).get("status", "done")
-        subs_mod.update_retrain_status(history_id, final_status)
-
-    _run_async(_wrapped)
-    return {"job_id": jid, "history_id": history_id}
-
-
-# =============================================================================
 # AUC Monitor эндпоинты
 # =============================================================================
 
@@ -1186,8 +1101,6 @@ class AucMonitorSettingsReq(BaseModel):
     enabled: bool = False
     interval_hours: int = 6
     warn_threshold: float = 0.54
-    retrain_threshold: float = 0.52
-    auto_retrain: bool = True
 
 
 @app.get("/api/auc_monitor", tags=["models"])
@@ -1205,11 +1118,9 @@ def set_auc_monitor(req: AucMonitorSettingsReq, _=Depends(auth.require_admin)):
     """Обновляет настройки монитора и (пере)запускает поток."""
     with _AUC_MONITOR_LOCK:
         _AUC_MONITOR.update({
-            "enabled":           req.enabled,
-            "interval_hours":    req.interval_hours,
-            "warn_threshold":    req.warn_threshold,
-            "retrain_threshold": req.retrain_threshold,
-            "auto_retrain":      req.auto_retrain,
+            "enabled":        req.enabled,
+            "interval_hours": req.interval_hours,
+            "warn_threshold": req.warn_threshold,
         })
     if req.enabled:
         _ensure_monitor_thread()

@@ -91,10 +91,4 @@ export const api = {
   getSignalAnalysis: (signalId) => req(`/api/signals/${signalId}/analysis`),
   getActuals: ({ symbol, interval, from_time, steps }) =>
     req(`/api/actuals?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&from_time=${encodeURIComponent(from_time || "")}&steps=${steps || 10}`),
-  // Переобучение по расписанию (admin)
-  getRetrainHistory: () => req("/api/retrain/history"),
-  saveRetrainSchedules: (schedules) =>
-    req("/api/retrain/schedules", { method: "POST", body: JSON.stringify({ schedules }) }),
-  triggerRetrain: (interval) =>
-    req("/api/retrain/trigger", { method: "POST", body: JSON.stringify({ interval }) }),
 };

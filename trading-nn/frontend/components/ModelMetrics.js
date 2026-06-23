@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@/lib/api";
+import FeatureEditor from "@/components/FeatureEditor";
 
 const THRESH_OK   = 0.56;
 const THRESH_WARN = 0.54;
@@ -172,6 +173,7 @@ export default function ModelMetrics() {
   const [activeTags, setActiveTags] = useState(null);
   const [savingActive, setSavingActive] = useState(false);
   const [savedActive, setSavedActive] = useState(false);
+  const [featModelTag, setFeatModelTag] = useState(null); // тег модели, у которой открыт редактор признаков
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -332,12 +334,6 @@ export default function ModelMetrics() {
                 style={{ accentColor: "var(--primary)", width: 15, height: 15 }} />
               Включить мониторинг
             </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
-              <input type="checkbox" checked={monitor.auto_retrain}
-                onChange={e => setMonitor(m => ({ ...m, auto_retrain: e.target.checked }))}
-                style={{ accentColor: "var(--primary)", width: 15, height: 15 }} />
-              Авто-retrain при критичном AUC
-            </label>
             <div>
               <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Проверять каждые, ч</div>
               <input type="number" min={1} max={168} value={monitor.interval_hours}
@@ -348,15 +344,6 @@ export default function ModelMetrics() {
               <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Порог предупреждения</div>
               <input type="number" min={0.5} max={0.99} step={0.01} value={monitor.warn_threshold}
                 onChange={e => setMonitor(m => ({ ...m, warn_threshold: +e.target.value }))}
-                style={{ width: "100%", padding: "6px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--ink-2)", color: "var(--text)", fontSize: 13 }} />
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>
-                Порог авто-retrain
-                <span style={{ marginLeft: 6, color: "var(--short)", fontSize: 10 }}>↓ запустит дообучение</span>
-              </div>
-              <input type="number" min={0.5} max={0.99} step={0.01} value={monitor.retrain_threshold}
-                onChange={e => setMonitor(m => ({ ...m, retrain_threshold: +e.target.value }))}
                 style={{ width: "100%", padding: "6px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--ink-2)", color: "var(--text)", fontSize: 13 }} />
             </div>
           </div>
@@ -375,11 +362,6 @@ export default function ModelMetrics() {
               </span>
             )}
           </div>
-          {monitor.last_triggered?.length > 0 && (
-            <div style={{ marginTop: 10, fontSize: 12, color: "var(--amber)" }}>
-              Последний retrain: {monitor.last_triggered.map(t => `${t.tag} (AUC ${t.auc?.toFixed(4)})`).join(", ")}
-            </div>
-          )}
         </div>
       )}
 
@@ -464,6 +446,18 @@ export default function ModelMetrics() {
                 <td style={{ padding: "10px 10px" }}>
                   <div style={{ display: "flex", gap: 6 }}>
                     <button
+                      onClick={() => setFeatModelTag(prev => prev === m.tag ? null : m.tag)}
+                      title="Управление признаками"
+                      style={{
+                        padding: "4px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer",
+                        border: `1px solid ${featModelTag === m.tag ? "var(--primary)" : "var(--line)"}`,
+                        background: featModelTag === m.tag ? "var(--primary)" : "transparent",
+                        color: featModelTag === m.tag ? "#fff" : "var(--muted)",
+                      }}
+                    >
+                      f(x)
+                    </button>
+                    <button
                       onClick={() => handleRefresh(m.tag)}
                       disabled={refreshing[m.tag]}
                       title="Пересчитать AUC"
@@ -498,9 +492,40 @@ export default function ModelMetrics() {
       <div style={{ marginTop: 14, fontSize: 11, color: "var(--muted)", display: "flex", gap: 16, flexWrap: "wrap" }}>
         <span><span style={{ color: "var(--long)", fontWeight: 600 }}>OK</span> ≥ {THRESH_OK}</span>
         <span><span style={{ color: "var(--amber)", fontWeight: 600 }}>WARN</span> {THRESH_WARN}–{THRESH_OK}</span>
-        <span><span style={{ color: "var(--short)", fontWeight: 600 }}>КРИТ</span> &lt; {THRESH_WARN} → авто-retrain</span>
+        <span><span style={{ color: "var(--short)", fontWeight: 600 }}>КРИТ</span> &lt; {THRESH_WARN}</span>
         <span style={{ opacity: 0.6 }}>AUC 0.5 = случайное угадывание</span>
       </div>
+
+      {/* Редактор признаков выбранной модели */}
+      {featModelTag && (
+        <div style={{
+          marginTop: 18, borderRadius: 12, border: "1px solid var(--primary)",
+          background: "var(--ink-2)", overflow: "hidden",
+        }}>
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "12px 16px", borderBottom: "1px solid var(--line)",
+          }}>
+            <div>
+              <span style={{ fontWeight: 700, fontSize: 14 }}>Признаки модели:</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--primary)", marginLeft: 8 }}>{featModelTag}</span>
+            </div>
+            <button onClick={() => setFeatModelTag(null)} style={{
+              background: "transparent", border: "none", cursor: "pointer",
+              fontSize: 18, color: "var(--muted)", lineHeight: 1,
+            }}>✕</button>
+          </div>
+          <div style={{ padding: "14px 16px" }}>
+            <p style={{ fontSize: 12, color: "var(--muted)", margin: "0 0 12px" }}>
+              Изменения применяются при следующем обучении. Нажмите «Сохранить в модель» — настройки будут автоматически применяться при инференсе.
+            </p>
+            <FeatureEditor
+              modelTag={featModelTag}
+              interval={metrics.find(m => m.tag === featModelTag)?.interval || "1d"}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
