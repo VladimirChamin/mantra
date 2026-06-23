@@ -1446,20 +1446,10 @@ def _build_signal_explanation(
         v = feats[col].iloc[-(1 + n)]
         return None if pd.isna(v) else float(v)
 
-    # ── 1. Сигнал нейросети и уверенность ────────────────────────────────────
-    conf_pct = round(max(p_up, 1 - p_up) * 100, 1)
-    if direction == "LONG":
-        reasons.append(
-            f"Нейросеть ожидает рост с вероятностью {p_up*100:.1f}% "
-            f"(порог: {cfg.prob_threshold*100:.0f}%)"
-        )
-    elif direction == "SHORT":
-        reasons.append(
-            f"Нейросеть ожидает снижение с вероятностью {(1-p_up)*100:.1f}% "
-            f"(порог: {cfg.prob_threshold*100:.0f}%)"
-        )
-    else:
+    # ── 1. Сигнал нейросети (без вероятности) ────────────────────────────────
+    if direction == "FLAT":
         conf = max(p_up, 1 - p_up)
+        conf_pct = round(conf * 100, 1)
         if conf < cfg.prob_threshold:
             reasons.append(
                 f"Сигнала нет — уверенность модели ({conf_pct}%) "
@@ -1585,14 +1575,6 @@ def _build_signal_explanation(
             reasons.append(f"Низкая волатильность (ATR={atr_pct:.1f}% от цены) — узкие уровни SL/TP, сжатие диапазона")
         else:
             reasons.append(f"Умеренная волатильность (ATR={atr_pct:.1f}% от цены)")
-
-    # ── 9. Ожидаемая доходность ───────────────────────────────────────────────
-    if abs(fwd_ret) > 0.0001:
-        ret_pct = round(fwd_ret * 100, 2)
-        reasons.append(
-            f"Прогнозируемая доходность за {cfg.horizon} баров: "
-            f"{'+'if ret_pct>0 else ''}{ret_pct}%"
-        )
 
     return reasons
 
