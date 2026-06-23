@@ -1,8 +1,5 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { api } from "@/lib/api";
-import { AnalysisResult } from "@/components/AIAnalysis";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function verdictColor(v) {
@@ -287,46 +284,127 @@ function buildSignalsListHtml(signals) {
   `;
 }
 
-// ── генерация HTML истории AI-анализов ────────────────────────────────────────
-function buildAiListHtml(items, fullData) {
-  const blocks = items.map(item => {
-    const data = fullData[item.id];
-    const v    = data?.verdict || {};
-    const vc   = verdictCss(item.verdict);
+// ── генерация HTML одного AI-анализа (полный) ────────────────────────────────
+function buildSingleAiHtml(item, data) {
+  const v   = data?.verdict || {};
+  const vc  = verdictCss(item.verdict);
+  const dirBadge = item.signal_direction
+    ? `<span class="badge ${DIR_CSS[item.signal_direction] || "flat"}">${item.signal_direction}</span>` : "";
 
-    let body = "";
-    if (data) {
-      if (v.recommendation) body += `<p><strong>Вывод:</strong> ${v.recommendation}</p>`;
-      if (v.news_summary)   body += `<p><strong>Новостной фон:</strong> ${v.news_summary}</p>`;
-      if (v.key_risks?.length || v.key_catalysts?.length) {
-        body += `<div class="two-col" style="margin-top:8px">`;
-        if (v.key_risks?.length)
-          body += `<div><strong>Риски:</strong><ul>${v.key_risks.map(r => `<li>${r}</li>`).join("")}</ul></div>`;
-        if (v.key_catalysts?.length)
-          body += `<div><strong>Катализаторы:</strong><ul>${v.key_catalysts.map(c => `<li>${c}</li>`).join("")}</ul></div>`;
-        body += `</div>`;
-      }
-    } else {
-      body = `<p style="color:#9ca3af;font-style:italic">Детали не загружены</p>`;
-    }
-
-    const dirBadge = item.signal_direction
-      ? `<span class="badge ${DIR_CSS[item.signal_direction] || "flat"}">${item.signal_direction}</span>` : "";
-
-    return `<div class="section">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-        <strong style="font-size:15px;font-family:monospace">${item.symbol}</strong>
-        <span class="badge ${vc}">${verdictLabel(item.verdict)}</span>
-        ${dirBadge}
-        <span style="margin-left:auto;font-size:11px;color:#6b7280">${fmtDate(item.created_at)}</span>
+  let body = `
+    <h1>${item.symbol} · AI-анализ</h1>
+    <div class="meta">${fmtDate(item.created_at)} ${dirBadge}</div>
+    <div class="verdict-box ${vc}">
+      <div>
+        <div class="verdict-text ${vc}">${item.verdict || "—"}</div>
+        <div class="verdict-sub">Фундаментальный анализ ${vc === "confirm" ? "согласен с" : vc === "contra" ? "противоречит" : "нейтрален к"} сигналу нейросети</div>
       </div>
-      ${body}
     </div>`;
-  }).join("");
 
+  if (!data) return body;
+
+  if (v.recommendation)
+    body += `<div class="section"><div class="section-title">Вывод</div><p>${v.recommendation}</p></div>`;
+
+  if (v.news_summary) {
+    body += `<div class="section"><div class="section-title">Новостной фон</div><p>${v.news_summary}</p>`;
+    if (data.news?.length)
+      body += `<ul style="margin-top:6px">${data.news.map(n => `<li style="font-size:11px;opacity:.6">${n.title}</li>`).join("")}</ul>`;
+    body += `</div>`;
+  }
+
+  if (data.cot || v.cot_summary) {
+    body += `<div class="section"><div class="section-title">COT позиции (CFTC)${data.cot ? ` · ${data.cot.market}` : ""}</div>`;
+    if (data.cot) {
+      const cot = data.cot;
+      body += `<table><tr><th>Участники</th><th>Long</th><th>Short</th><th>Нетто</th></tr>`;
+      [["Commercials", cot.commercial_long, cot.commercial_short],
+       ["Large Specs", cot.noncommercial_long, cot.noncommercial_short],
+       ["Small Specs", cot.nonreportable_long, cot.nonreportable_short]
+      ].forEach(([label, l, s]) => {
+        if (l == null) return;
+        const net = (l || 0) - (s || 0);
+        body += `<tr><td>${label}</td><td style="color:#065f46">${(l/1000).toFixed(0)}k</td><td style="color:#991b1b">${(s/1000).toFixed(0)}k</td><td style="font-weight:700;color:${net>0?"#065f46":"#991b1b"}">${net>0?"+":""}${(net/1000).toFixed(0)}k</td></tr>`;
+      });
+      body += `</table>`;
+    }
+    if (v.cot_summary) body += `<p>${v.cot_summary}</p>`;
+    body += `</div>`;
+  }
+
+  if (data.fear_greed || v.macro_summary) {
+    body += `<div class="section"><div class="section-title">Макро / Сентимент</div>`;
+    if (data.fear_greed) {
+      const fg = data.fear_greed;
+      const fgColor = fg.value > 60 ? "#065f46" : fg.value < 40 ? "#991b1b" : "#92400e";
+      body += `<p><strong style="color:${fgColor}">Fear &amp; Greed: ${fg.value} — ${fg.label}</strong></p>`;
+    }
+    if (v.macro_summary) body += `<p>${v.macro_summary}</p>`;
+    body += `</div>`;
+  }
+
+  if (data.onchain || v.onchain_summary) {
+    body += `<div class="section"><div class="section-title">Рыночные данные</div>`;
+    if (data.onchain) {
+      const oc  = data.onchain;
+      const m   = oc.market      || {};
+      const der = oc.derivatives || {};
+      const ls  = oc.long_short  || {};
+      const nf  = oc.netflow     || {};
+
+      function fmtL(n) {
+        if (n == null) return null;
+        if (n >= 1e9) return `$${(n/1e9).toFixed(2)}B`;
+        if (n >= 1e6) return `$${(n/1e6).toFixed(2)}M`;
+        if (n >= 1e3) return `${(n/1e3).toFixed(1)}K`;
+        return String(n);
+      }
+
+      const rows = [
+        m.market_cap_usd       != null && ["Рыночная кап.", fmtL(m.market_cap_usd), ""],
+        m.total_volume_24h     != null && ["Объём 24ч",     fmtL(m.total_volume_24h), ""],
+        m.price_change_24h_pct != null && ["Изм. 24ч",      `${m.price_change_24h_pct.toFixed(2)}%`, m.price_change_24h_pct >= 0 ? "#065f46" : "#991b1b"],
+        m.price_change_7d_pct  != null && ["Изм. 7д",       `${m.price_change_7d_pct.toFixed(2)}%`,  m.price_change_7d_pct  >= 0 ? "#065f46" : "#991b1b"],
+        m.ath_change_pct       != null && ["От ATH",        `${m.ath_change_pct.toFixed(1)}%`, "#6b7280"],
+        der.open_interest_usd  != null && ["Open Interest", fmtL(der.open_interest_usd), ""],
+        der.funding_rate_avg   != null && ["Funding Rate",  `${der.funding_rate_avg > 0 ? "+" : ""}${der.funding_rate_avg}%`, der.funding_rate_avg < 0 ? "#991b1b" : der.funding_rate_avg > 0.02 ? "#065f46" : "#6b7280"],
+        ls.long_short_ratio    != null && ["L/S Ratio",     `${ls.long_short_ratio} (L ${ls.long_pct}% / S ${ls.short_pct}%)`, ""],
+        nf.active_addresses_24h != null && ["Акт. адресов 24ч", Number(nf.active_addresses_24h).toLocaleString("ru-RU"), ""],
+        nf.tx_count_24h        != null && ["Транзакций 24ч", Number(nf.tx_count_24h).toLocaleString("ru-RU"), ""],
+        nf.avg_fee_usd         != null && ["Ср. комиссия",  `$${nf.avg_fee_usd}`, ""],
+      ].filter(Boolean);
+
+      if (rows.length)
+        body += `<div class="kv-grid">${rows.map(([l, val, col]) =>
+          `<div class="kv"><div class="label">${l}</div><div class="val" style="${col ? `color:${col}` : ""}">${val}</div></div>`
+        ).join("")}</div>`;
+    }
+    if (v.onchain_summary) body += `<p style="margin-top:8px">${v.onchain_summary}</p>`;
+    body += `</div>`;
+  }
+
+  if (v.key_risks?.length || v.key_catalysts?.length) {
+    body += `<div class="two-col">`;
+    if (v.key_risks?.length)
+      body += `<div><h3>Ключевые риски</h3><ul>${v.key_risks.map(r => `<li>${r}</li>`).join("")}</ul></div>`;
+    if (v.key_catalysts?.length)
+      body += `<div><h3>Катализаторы</h3><ul>${v.key_catalysts.map(c => `<li>${c}</li>`).join("")}</ul></div>`;
+    body += `</div>`;
+  }
+
+  if (v.trade_plan)
+    body += `<div class="section"><div class="section-title">Торговый план</div><p>${v.trade_plan}</p></div>`;
+
+  return body;
+}
+
+// ── генерация HTML истории AI-анализов (список) ───────────────────────────────
+function buildAiListHtml(items, fullData) {
+  const blocks = items.map(item => buildSingleAiHtml(item, fullData[item.id])).join('<hr class="sep"/>');
   return `
     <h1>История AI-анализов</h1>
     <div class="meta">${items.length} записей · Mantra Trading NN</div>
+    <hr class="sep"/>
     ${blocks}
   `;
 }
@@ -395,53 +473,9 @@ function SignalRow({ s, active, onSelect, onDelete }) {
 
 // ── Основной компонент ────────────────────────────────────────────────────────
 export default function HistoryPanel({ signals, onDeleteSignal, onSelectSignal, activeSignalId }) {
-  const [tab, setTab] = useState("signals");
-
-  const [aiItems,   setAiItems]   = useState([]);
-  const [aiLoading, setAiLoading] = useState(true);
-  const [openId,    setOpenId]    = useState(null);
-  const [fullData,  setFullData]  = useState({});
-  const [loadingId, setLoadingId] = useState(null);
-
-  // сигнал → его AI-анализ (по symbol, если есть)
-  const aiBySymbol = {};
-  aiItems.forEach(it => { if (!aiBySymbol[it.symbol]) aiBySymbol[it.symbol] = it; });
-
-  useEffect(() => {
-    api.listAnalyses()
-      .then(d => setAiItems(d.analyses || []))
-      .catch(() => setAiItems([]))
-      .finally(() => setAiLoading(false));
-  }, []);
-
-  async function toggleAi(id) {
-    if (openId === id) { setOpenId(null); return; }
-    setOpenId(id);
-    if (fullData[id]) return;
-    setLoadingId(id);
-    try {
-      const data = await api.getAnalysis(id);
-      setFullData(d => ({ ...d, [id]: data }));
-    } catch {}
-    setLoadingId(null);
-  }
-
-  // PDF одного прогноза (с AI если есть)
+  // PDF одного прогноза
   async function exportSignalPdf(signal) {
-    // ищем AI-анализ для этого символа
-    const aiMeta = aiBySymbol[signal.symbol];
-    let analysisData = null;
-    if (aiMeta) {
-      if (fullData[aiMeta.id]) {
-        analysisData = fullData[aiMeta.id];
-      } else {
-        try {
-          analysisData = await api.getAnalysis(aiMeta.id);
-          setFullData(d => ({ ...d, [aiMeta.id]: analysisData }));
-        } catch {}
-      }
-    }
-    openPdf(buildSignalHtml(signal, analysisData), `${signal.symbol} ${signal.interval}`);
+    openPdf(buildSignalHtml(signal, null), `${signal.symbol} ${signal.interval}`);
   }
 
   // обработчик клика по строке или кнопке PDF
@@ -453,149 +487,38 @@ export default function HistoryPanel({ signals, onDeleteSignal, onSelectSignal, 
     }
   }
 
-  const TABS = [
-    { k: "signals", label: `Прогнозы${signals.length ? ` (${signals.length})` : ""}` },
-    { k: "ai",      label: `AI-анализы${aiItems.length ? ` (${aiItems.length})` : ""}` },
-  ];
-
   return (
     <div className="card" style={{ marginTop: 18 }}>
       {/* Шапка */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-        <div style={{ display: "flex", gap: 4 }}>
-          {TABS.map(t => (
-            <button key={t.k} onClick={() => setTab(t.k)} style={{
-              padding: "6px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-              cursor: "pointer", border: "none", fontFamily: "var(--body)",
-              background: tab === t.k ? "var(--primary)" : "transparent",
-              color: tab === t.k ? "#fff" : "var(--muted)",
-              transition: "all .15s",
-            }}>{t.label}</button>
-          ))}
-        </div>
-        {/* PDF всей вкладки */}
-        <button
-          onClick={() => {
-            if (tab === "signals") {
-              openPdf(buildSignalsListHtml(signals), "История прогнозов");
-            } else {
-              openPdf(buildAiListHtml(aiItems, fullData), "История AI-анализов");
-            }
-          }}
-          style={{
-            padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
-            cursor: "pointer", border: "1px solid var(--line)",
-            background: "transparent", color: "var(--muted)", fontFamily: "var(--body)",
-            display: "flex", alignItems: "center", gap: 6,
-          }}
-        >
-          ⬇ PDF списка
-        </button>
+      <div style={{ marginBottom: 14 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>
+          Прогнозы{signals.length ? ` (${signals.length})` : ""}
+        </span>
       </div>
 
-      {/* ── Вкладка: Прогнозы ── */}
-      {tab === "signals" && (
-        signals.length === 0 ? (
-          <div className="empty">История прогнозов пуста.</div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ opacity: 0.5, textAlign: "left" }}>
-                  {["Дата", "Актив", "ТФ", "Направление", "Вход", "SL", "TP", "P(up)", ""].map(h => (
-                    <th key={h} style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)", fontWeight: 500 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {signals.map(s => (
-                  <SignalRow key={s.id} s={s}
-                    active={activeSignalId === s.id}
-                    onSelect={handleSignalClick}
-                    onDelete={onDeleteSignal}
-                  />
+      {signals.length === 0 ? (
+        <div className="empty">История прогнозов пуста.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ opacity: 0.5, textAlign: "left" }}>
+                {["Дата", "Актив", "ТФ", "Направление", "Вход", "SL", "TP", "P(up)", ""].map(h => (
+                  <th key={h} style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)", fontWeight: 500 }}>{h}</th>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )
-      )}
-
-      {/* ── Вкладка: AI-анализы ── */}
-      {tab === "ai" && (
-        aiLoading ? (
-          <div className="empty">Загрузка…</div>
-        ) : aiItems.length === 0 ? (
-          <div className="empty">История анализов пуста.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {aiItems.map(item => {
-              const isOpen = openId === item.id;
-              const vc     = verdictColor(item.verdict);
-              return (
-                <div key={item.id} style={{
-                  border: `1px solid ${isOpen ? vc : "var(--line)"}`,
-                  borderRadius: 10, overflow: "hidden", transition: "border-color .15s",
-                }}>
-                  <button onClick={() => toggleAi(item.id)} style={{
-                    width: "100%", display: "flex", alignItems: "center", gap: 12,
-                    padding: "11px 14px", background: "var(--ink)",
-                    border: "none", cursor: "pointer", textAlign: "left",
-                  }}>
-                    <span style={{ fontWeight: 700, fontFamily: "var(--mono)", fontSize: 14, color: "var(--text)", minWidth: 80 }}>
-                      {item.symbol}
-                    </span>
-                    <span style={{
-                      fontSize: 11, padding: "2px 8px", borderRadius: 6,
-                      background: `${vc}20`, border: `1px solid ${vc}`, color: vc,
-                      fontWeight: 600, whiteSpace: "nowrap",
-                    }}>
-                      {verdictLabel(item.verdict)}
-                    </span>
-                    {item.signal_direction && (
-                      <span style={{ fontSize: 12, color: DIR_COLOR[item.signal_direction] || "var(--muted)", fontWeight: 600 }}>
-                        {item.signal_direction}
-                      </span>
-                    )}
-                    <span style={{ fontSize: 11, color: "var(--muted-2)", marginLeft: "auto", whiteSpace: "nowrap" }}>
-                      {fmtDate(item.created_at)}
-                    </span>
-                    <span style={{ fontSize: 12, color: "var(--muted-2)", marginLeft: 6 }}>
-                      {isOpen ? "▲" : "▼"}
-                    </span>
-                  </button>
-
-                  {isOpen && (
-                    <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--line)" }}>
-                      {loadingId === item.id ? (
-                        <div style={{ padding: "20px 0", color: "var(--muted-2)", fontSize: 13 }}>Загрузка…</div>
-                      ) : fullData[item.id] ? (
-                        <>
-                          <AnalysisResult result={fullData[item.id]} />
-                          <div style={{ marginTop: 12, textAlign: "right" }}>
-                            <button
-                              onClick={() => openPdf(
-                                buildAiListHtml([item], { [item.id]: fullData[item.id] }),
-                                `AI-анализ ${item.symbol}`
-                              )}
-                              style={{
-                                padding: "5px 14px", borderRadius: 7, fontSize: 12, cursor: "pointer",
-                                border: "1px solid var(--line)", background: "transparent",
-                                color: "var(--muted)", fontFamily: "var(--body)",
-                              }}
-                            >⬇ PDF этого анализа</button>
-                          </div>
-                        </>
-                      ) : (
-                        <div style={{ padding: "20px 0", color: "var(--short)", fontSize: 13 }}>Не удалось загрузить</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )
+              </tr>
+            </thead>
+            <tbody>
+              {signals.map(s => (
+                <SignalRow key={s.id} s={s}
+                  active={activeSignalId === s.id}
+                  onSelect={handleSignalClick}
+                  onDelete={onDeleteSignal}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

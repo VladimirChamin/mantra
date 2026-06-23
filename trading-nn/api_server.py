@@ -316,6 +316,7 @@ class AnalysisReq(BaseModel):
     signal_direction: str = "UNKNOWN"
     signal_entry: Optional[float] = None
     company_hint: str = ""
+    signal_id: Optional[int] = None
 
 
 # =============================================================================
@@ -960,11 +961,18 @@ def run_analysis(
 
     # списываем квоту только при успешном завершении
     auth.consume_ai_quota(current_user["id"], req.symbol)
-    # сохраняем результат в БД
-    analysis_id = auth.save_ai_analysis(current_user["id"], result)
+    # сохраняем результат в БД (привязываем к signal_id если передан)
+    analysis_id = auth.save_ai_analysis(current_user["id"], result, signal_id=req.signal_id)
     result["analysis_id"] = analysis_id
     result["quota"] = auth.get_ai_quota_info(current_user)
     return result
+
+
+@app.get("/api/signals/{signal_id}/analysis", tags=["analysis"])
+def get_signal_analysis(signal_id: int, current_user: dict = Depends(auth.get_current_user)):
+    """Возвращает сохранённый AI-анализ для конкретного сигнала (или null)."""
+    result = auth.get_ai_analysis_by_signal(signal_id, current_user["id"])
+    return {"result": result}
 
 
 @app.get("/api/analyses", tags=["analysis"])

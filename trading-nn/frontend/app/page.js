@@ -8,6 +8,7 @@ import ForecastChart from "@/components/ForecastChart";
 import MetricGrid from "@/components/MetricGrid";
 import EquityChart from "@/components/EquityChart";
 import JobLog from "@/components/JobLog";
+import AIAnalysis from "@/components/AIAnalysis";
 import HistoryPanel from "@/components/HistoryPanel";
 import AdminPanel from "@/components/AdminPanel";
 import Screener from "@/components/Screener";
@@ -400,13 +401,20 @@ export default function Dashboard() {
     } catch (e) { setErr(e.message); setBusy(false); }
   }
 
+  const [currentSignalId, setCurrentSignalId] = useState(null);
+
   async function getSignal() {
-    setErr(""); setBusy(true); setSignal(null); setFc(null); setHistoryFc(null);
+    setErr(""); setBusy(true); setSignal(null); setFc(null); setHistoryFc(null); setCurrentSignalId(null);
     try {
       const f = await api.forecast({ ...pred, steps: 10, history: 50 });
       setFc(f);
       setSignal(f.signal);
-      api.mySignals().then(d => setSignals(d.signals || [])).catch(() => {});
+      // подгружаем список сигналов и берём id только что сохранённого (первый в списке)
+      api.mySignals().then(d => {
+        const list = d.signals || [];
+        setSignals(list);
+        if (list.length > 0) setCurrentSignalId(list[0].id);
+      }).catch(() => {});
     } catch (e) { setErr(e.message); }
     setBusy(false);
   }
@@ -1173,6 +1181,16 @@ export default function Dashboard() {
                   <SignalTicket signal={signal} />
                 </>
               )}
+              <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
+                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
+                <AIAnalysis
+                  symbol={pred.symbol}
+                  signal={signal}
+                  signalId={currentSignalId}
+                  quota={aiQuota}
+                  onQuotaUpdate={setAiQuota}
+                />
+              </div>
             </div>
           )}
 
@@ -1190,6 +1208,16 @@ export default function Dashboard() {
                 <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
               </div>
               <ForecastChart data={historyFc} isAdmin={isAdmin} actuals={historyFc.actuals} />
+              <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
+                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
+                <AIAnalysis
+                  symbol={historyFc.symbol}
+                  signal={historyFc.signal}
+                  signalId={historyFc.signal_id}
+                  quota={aiQuota}
+                  onQuotaUpdate={setAiQuota}
+                />
+              </div>
             </div>
           )}
         </>

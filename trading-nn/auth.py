@@ -111,6 +111,7 @@ def init_db() -> None:
         "ALTER TABLE users ADD COLUMN access_until TEXT DEFAULT NULL",
         "ALTER TABLE signals ADD COLUMN forecast_json TEXT DEFAULT NULL",
         "ALTER TABLE signals ADD COLUMN explanation_json TEXT DEFAULT NULL",
+        "ALTER TABLE ai_analyses ADD COLUMN signal_id INTEGER DEFAULT NULL",
     ]:
         try:
             con.execute(_col_sql)
@@ -465,14 +466,14 @@ def consume_ai_quota(user_id: int, symbol: str = None):
         con.commit()
 
 
-def save_ai_analysis(user_id: int, result: dict) -> int:
+def save_ai_analysis(user_id: int, result: dict, signal_id: int | None = None) -> int:
     verdict_block = result.get("verdict", {})
     with _con() as con:
         cur = con.execute(
             """INSERT INTO ai_analyses
                (user_id, symbol, signal_direction, signal_entry,
-                verdict, verdict_conf, recommendation, result_json)
-               VALUES (?,?,?,?,?,?,?,?)""",
+                verdict, verdict_conf, recommendation, result_json, signal_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (
                 user_id,
                 result.get("symbol"),
@@ -482,6 +483,7 @@ def save_ai_analysis(user_id: int, result: dict) -> int:
                 verdict_block.get("confidence"),
                 verdict_block.get("recommendation"),
                 json.dumps(result, ensure_ascii=False),
+                signal_id,
             ),
         )
         con.commit()
@@ -505,6 +507,17 @@ def get_ai_analysis(analysis_id: int, user_id: int) -> dict | None:
         row = con.execute(
             "SELECT result_json FROM ai_analyses WHERE id=? AND user_id=?",
             (analysis_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    return json.loads(row["result_json"])
+
+
+def get_ai_analysis_by_signal(signal_id: int, user_id: int) -> dict | None:
+    with _con() as con:
+        row = con.execute(
+            "SELECT result_json FROM ai_analyses WHERE signal_id=? AND user_id=? ORDER BY id DESC LIMIT 1",
+            (signal_id, user_id),
         ).fetchone()
     if not row:
         return None

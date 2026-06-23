@@ -88,6 +88,7 @@ export const api = {
   getFeatureImportance: (symbol, interval) =>
     req(`/api/feature_importance?symbol=${symbol}&interval=${interval}`),
   // Реальные бары после прогноза (для сравнения)
+  getSignalAnalysis: (signalId) => req(`/api/signals/${signalId}/analysis`),
   getActuals: ({ symbol, interval, from_time, steps }) =>
     req(`/api/actuals?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&from_time=${encodeURIComponent(from_time || "")}&steps=${steps || 10}`),
   // Переобучение по расписанию (admin)

@@ -374,13 +374,27 @@ export function AnalysisHistory() {
   );
 }
 
-export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuotaUpdate }) {
-  const [loading, setLoading] = useState(false);
-  const [result, setResult]   = useState(null);
-  const [error, setError]     = useState("");
-  const [quota, setQuota]     = useState(initialQuota);
+export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuotaUpdate, signalId }) {
+  const [loading, setLoading]   = useState(false);
+  const [result, setResult]     = useState(null);
+  const [error, setError]       = useState("");
+  const [quota, setQuota]       = useState(initialQuota);
+  const [loadingSaved, setLoadingSaved] = useState(false);
 
   useEffect(() => { if (initialQuota) setQuota(initialQuota); }, [initialQuota]);
+
+  // При смене signalId — подгружаем сохранённый анализ
+  useEffect(() => {
+    if (!signalId) { setResult(null); return; }
+    setResult(null); setError("");
+    setLoadingSaved(true);
+    import("@/lib/api").then(({ api }) =>
+      api.getSignalAnalysis(signalId)
+        .then(d => { if (d.result) setResult(d.result); })
+        .catch(() => {})
+        .finally(() => setLoadingSaved(false))
+    );
+  }, [signalId]);
 
   const canRequest = !quota || quota.ok !== false;
 
@@ -393,6 +407,7 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
         signal_direction: signal?.direction || "UNKNOWN",
         signal_entry:     signal?.entry || null,
         company_hint:     signal?.symbol || "",
+        signal_id:        signalId || null,
       });
       setResult(data);
       if (data.quota) {
@@ -411,6 +426,9 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
 
   return (
     <div style={{ marginTop: 0 }}>
+      {loadingSaved && (
+        <div style={{ fontSize: 12, color: "var(--muted-2)", marginBottom: 10 }}>Загружаю сохранённый анализ…</div>
+      )}
       {/* Кнопка и счётчик квоты */}
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
         <button
