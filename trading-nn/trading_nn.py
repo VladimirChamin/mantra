@@ -85,6 +85,7 @@ class Config:
     prob_threshold: float = 0.56  # минимальная p_up (или 1-p_up) для входа
     min_rr: float = 1.2           # минимальное R:R, иначе FLAT
     direction_filter: str = "both"  # "long" / "short" / "both"
+    excluded_features: list = field(default_factory=list)  # признаки отключённые пользователем
     # --- сохранение ---
     model_dir: str = "models"
     feature_cols: list = field(default_factory=list)  # заполняется автоматически
@@ -308,10 +309,13 @@ def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models",
     active_tags — если задан (непустой), только модели из этого списка считаются доступными.
     Выбрасывает FileNotFoundError если ни одна не найдена.
     """
+    cls = detect_asset_class(symbol)
     candidates = [
-        f"{symbol.upper()}_{interval}",                        # индивидуальная
-        class_model_tag(detect_asset_class(symbol), interval), # класс активов
-        f"UNIVERSAL_{interval}",                               # универсальная
+        f"{symbol.upper()}_{interval}",          # индивидуальная
+        f"{cls.upper()}_{interval}",             # класс активов (оба направления)
+        f"{cls.upper()}_long_{interval}",        # класс активов long-only
+        f"{cls.upper()}_short_{interval}",       # класс активов short-only
+        f"UNIVERSAL_{interval}",                 # универсальная
     ]
     for tag in candidates:
         path = os.path.join(model_dir, f"{tag}_model.keras")
@@ -321,9 +325,10 @@ def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models",
         if active_tags and tag not in active_tags:
             continue
         return tag
+    checked = ", ".join(dict.fromkeys(candidates))  # без дублей, сохраняя порядок
     raise FileNotFoundError(
         f"Модель не найдена для '{symbol}' ({interval}). "
-        f"Проверено: {', '.join(candidates)}. "
+        f"Проверено: {checked}. "
         "Обучите модель или активируйте нужную в разделе «Нейросети»."
     )
 
@@ -727,9 +732,82 @@ def triple_barrier_targets(df: pd.DataFrame, cfg: Config):
             p_fill[i]  = 1.0
             valid[i]   = True
 
+        elif offset < 0:
+            # ── Лимитный ордер: вход НИЖЕ рынка для лонга, ВЫШЕ для шорта ────
+            # LIMIT_BUY  срабатывает когда low  <= limit_buy  (цена опустилась до нашего лимита)
+            # LIMIT_SELL срабатывает когда high >= limit_sell (цена поднялась до нашего лимита)
+            limit_buy  = base_price + offset * a   # offset < 0 → ниже рынка
+            limit_sell = base_price - offset * a   # offset < 0 → выше рынка
+
+            # --- LONG (LIMIT_BUY) ---
+            long_fill_bar = None
+            for j in range(1, H + 1):
+                if low[i + j] <= limit_buy:
+                    long_fill_bar = j
+                    break
+
+            long_outcome = 0.0; long_ret = 0.0; long_filled = 0.0; long_hit = False
+            if long_fill_bar is not None:
+                long_filled = 1.0
+                entry_l = limit_buy
+                tp_l = entry_l + cfg.tp_atr_mult * a
+                sl_l = entry_l - cfg.sl_atr_mult * a
+                remaining = H - long_fill_bar
+                outcome_l = None
+                for k in range(1, remaining + 1):
+                    jj = i + long_fill_bar + k
+                    if jj >= n: break
+                    if high[jj] >= tp_l: outcome_l = 1; break
+                    if low[jj]  <= sl_l: outcome_l = 0; break
+                long_hit = outcome_l is not None
+                if outcome_l is None:
+                    end_bar = min(i + H, n - 1)
+                    outcome_l = 1 if close[end_bar] > entry_l else 0
+                long_outcome = float(outcome_l)
+                long_ret     = (close[min(i + H, n - 1)] - entry_l) / entry_l
+
+            # --- SHORT (LIMIT_SELL) ---
+            short_fill_bar = None
+            for j in range(1, H + 1):
+                if high[i + j] >= limit_sell:
+                    short_fill_bar = j
+                    break
+
+            short_outcome = 0.0; short_ret = 0.0; short_filled = 0.0; short_hit = False
+            if short_fill_bar is not None:
+                short_filled = 1.0
+                entry_s = limit_sell
+                tp_s = entry_s - cfg.tp_atr_mult * a
+                sl_s = entry_s + cfg.sl_atr_mult * a
+                remaining = H - short_fill_bar
+                outcome_s = None
+                for k in range(1, remaining + 1):
+                    jj = i + short_fill_bar + k
+                    if jj >= n: break
+                    if low[jj]  <= tp_s: outcome_s = 1; break
+                    if high[jj] >= sl_s: outcome_s = 0; break
+                short_hit = outcome_s is not None
+                if outcome_s is None:
+                    end_bar = min(i + H, n - 1)
+                    outcome_s = 1 if close[end_bar] < entry_s else 0
+                short_outcome = float(outcome_s)
+                short_ret     = (entry_s - close[min(i + H, n - 1)]) / entry_s
+
+            filled_any = long_filled + short_filled
+            p_fill[i]  = min(filled_any, 1.0)
+            if filled_any > 0:
+                profit_sum = long_filled * long_outcome + short_filled * short_outcome
+                p_up[i]    = profit_sum / filled_any
+                fwd_ret[i] = (long_filled * long_ret + short_filled * short_ret) / filled_any
+            else:
+                p_up[i] = 0.5; fwd_ret[i] = 0.0
+
+            barrier_hit[i] = long_hit or short_hit
+            fwd_vol[i] = vol
+            valid[i]   = True
+
         else:
-            # ── Отложенный ордер: симулируем оба направления, берём лучшее ───
-            # LONG (BUYSTOP): ордер срабатывает когда high >= buystop_level
+            # ── Стоп-ордер: вход выше рынка для лонга (BUYSTOP), ниже для шорта ──
             buystop  = base_price + offset * a
             sellstop = base_price - offset * a
 
@@ -834,10 +912,17 @@ def build_dataset(df: pd.DataFrame, cfg: Config, scaler: StandardScaler | None =
                          index_df=index_df, htf_df=htf_df)
     p_up, fwd_ret, fwd_vol, p_fill, valid, barrier_hit = triple_barrier_targets(feats, cfg)
 
-    # выбираем фичи (исключаем сырые цены/объём и абсолютный ATR)
-    exclude = {"open", "high", "low", "close", "volume", "atr"}
-    feature_cols = [c for c in feats.columns if c not in exclude]
-    cfg.feature_cols = feature_cols
+    # выбираем фичи:
+    # если scaler уже обучен (fit_scaler=False) и cfg.feature_cols заполнен из load_artifacts —
+    # используем сохранённый список, иначе вычисляем заново
+    if not fit_scaler and cfg.feature_cols:
+        # берём только те колонки которые реально есть в датафрейме
+        feature_cols = [c for c in cfg.feature_cols if c in feats.columns]
+    else:
+        exclude = {"open", "high", "low", "close", "volume", "atr"}
+        user_excluded = set(getattr(cfg, "excluded_features", []) or [])
+        feature_cols = [c for c in feats.columns if c not in exclude and c not in user_excluded]
+        cfg.feature_cols = feature_cols
 
     feats = feats.replace([np.inf, -np.inf], np.nan)
     X_raw = feats[feature_cols].to_numpy(dtype=np.float32)
@@ -1037,9 +1122,9 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
     sample_weight = [sw_p, ones_tr, ones_tr, ones_tr]
 
     callbacks = [
-        EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True),
+        EarlyStopping(monitor="val_auc", mode="max", patience=8, restore_best_weights=True),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, min_lr=1e-5),
-        ModelCheckpoint(paths["model"], monitor="val_loss", save_best_only=True),
+        ModelCheckpoint(paths["model"], monitor="val_auc", mode="max", save_best_only=True),
     ]
     if extra_callbacks:
         callbacks.extend(extra_callbacks)
@@ -1103,7 +1188,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
                     period: str | None = None,
                     horizon: int | None = None,
                     lookback: int | None = None,
-                    direction_filter: str = "both"):
+                    direction_filter: str = "both",
+                    excluded_features: list | None = None):
     """
     Обучает модель класса активов на пуле инструментов.
 
@@ -1141,6 +1227,8 @@ def train_universal(symbols: list[str], interval: str = "1d",
     if lookback is not None:
         cfg_proto.lookback = lookback
     cfg_proto.direction_filter = direction_filter
+    if excluded_features:
+        cfg_proto.excluded_features = list(excluded_features)
 
     all_X_tr, all_X_va = [], []
     all_yp_tr, all_yr_tr, all_yv_tr, all_yf_tr = [], [], [], []
@@ -1216,9 +1304,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
     model = build_model(cfg_proto.lookback, Xtr.shape[-1], cfg_proto)
 
     callbacks = [
-        EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True),
+        EarlyStopping(monitor="val_auc", mode="max", patience=8, restore_best_weights=True),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, min_lr=1e-5),
-        ModelCheckpoint(paths["model"], monitor="val_loss", save_best_only=True),
+        ModelCheckpoint(paths["model"], monitor="val_auc", mode="max", save_best_only=True),
     ]
     if extra_callbacks:
         callbacks.extend(extra_callbacks)
@@ -1287,7 +1375,8 @@ def load_artifacts(cfg: Config, active_tags: list[str] | None = None):
         saved = json.load(f)
     cfg.feature_cols = saved["feature_cols"]
     for k in ("lookback", "horizon", "tp_atr_mult", "sl_atr_mult",
-              "prob_threshold", "min_rr", "direction_filter"):
+              "prob_threshold", "min_rr", "direction_filter", "excluded_features",
+              "entry_offset_mult", "fill_prob_threshold"):
         if k in saved:
             setattr(cfg, k, saved[k])
     return model, scaler
@@ -1328,6 +1417,186 @@ def _infer_features(cfg: Config, df: pd.DataFrame, scaler) -> tuple:
     return scaler.transform(X_clean), feats
 
 
+def _build_signal_explanation(
+    direction: str,
+    p_up: float,
+    fwd_ret: float,
+    fwd_vol: float,
+    raw_rr: float,
+    cfg: "Config",
+    feats: "pd.DataFrame | None" = None,
+    df: "pd.DataFrame | None" = None,
+) -> list[str]:
+    """
+    Формирует список читаемых на русском причин для торгового сигнала
+    на основе реальных значений индикаторов последней свечи.
+    """
+    reasons: list[str] = []
+
+    def _fv(col):
+        """Значение последней строки feats по колонке, или None."""
+        if feats is None or col not in feats.columns:
+            return None
+        v = feats[col].iloc[-1]
+        return None if pd.isna(v) else float(v)
+
+    def _fv_prev(col, n=1):
+        if feats is None or col not in feats.columns or len(feats) <= n:
+            return None
+        v = feats[col].iloc[-(1 + n)]
+        return None if pd.isna(v) else float(v)
+
+    # ── 1. Сигнал нейросети и уверенность ────────────────────────────────────
+    conf_pct = round(max(p_up, 1 - p_up) * 100, 1)
+    if direction == "LONG":
+        reasons.append(
+            f"Нейросеть ожидает рост с вероятностью {p_up*100:.1f}% "
+            f"(порог: {cfg.prob_threshold*100:.0f}%)"
+        )
+    elif direction == "SHORT":
+        reasons.append(
+            f"Нейросеть ожидает снижение с вероятностью {(1-p_up)*100:.1f}% "
+            f"(порог: {cfg.prob_threshold*100:.0f}%)"
+        )
+    else:
+        conf = max(p_up, 1 - p_up)
+        if conf < cfg.prob_threshold:
+            reasons.append(
+                f"Сигнала нет — уверенность модели ({conf_pct}%) "
+                f"ниже порога {cfg.prob_threshold*100:.0f}%: рынок неопределён"
+            )
+        elif raw_rr < cfg.min_rr:
+            reasons.append(
+                f"Сигнала нет — соотношение прибыль/риск ({raw_rr:.2f}) "
+                f"ниже минимального {cfg.min_rr}: потенциал не оправдывает риск"
+            )
+        else:
+            reasons.append("Сигнала нет — условия входа не выполнены")
+
+    # ── 2. Тренд (скользящие средние) ─────────────────────────────────────────
+    sma10 = _fv("sma_10")   # значение: (sma/close - 1), т.е. отклонение цены от SMA
+    sma50 = _fv("sma_50")
+    ema12 = _fv("ema_12")
+    ema26 = _fv("ema_26")
+
+    if sma10 is not None and sma50 is not None:
+        # sma_N = sma/close - 1 → sma10 > 0 означает close > sma10 (цена выше средней)
+        price_vs_sma10 = "выше" if sma10 < 0 else "ниже"   # sma < close → sma/close-1 < 0
+        price_vs_sma50 = "выше" if sma50 < 0 else "ниже"
+
+        if sma10 < 0 and sma50 < 0:
+            reasons.append("Восходящий тренд: цена выше SMA10 и SMA50 — бычий контекст")
+        elif sma10 > 0 and sma50 > 0:
+            reasons.append("Нисходящий тренд: цена ниже SMA10 и SMA50 — медвежий контекст")
+        elif sma10 < 0 and sma50 > 0:
+            reasons.append("Краткосрочный рост: цена выше SMA10, но ещё ниже SMA50 — возможная смена тенденции")
+        elif sma10 > 0 and sma50 < 0:
+            reasons.append("Краткосрочная коррекция: цена ниже SMA10, но выше SMA50 — откат в тренде")
+
+    # MACD — импульс
+    macd = _fv("macd")
+    macd_sig = _fv("macd_sig")
+    macd_prev = _fv_prev("macd")
+    if macd is not None and macd_sig is not None and macd_prev is not None:
+        if macd > macd_sig and macd_prev <= macd_sig:
+            reasons.append("MACD пересёк сигнальную линию снизу вверх — бычий импульс")
+        elif macd < macd_sig and macd_prev >= macd_sig:
+            reasons.append("MACD пересёк сигнальную линию сверху вниз — медвежий импульс")
+        elif macd > macd_sig:
+            reasons.append(f"MACD выше сигнальной линии — импульс направлен вверх")
+        else:
+            reasons.append(f"MACD ниже сигнальной линии — импульс направлен вниз")
+
+    # ── 3. RSI — перекупленность / перепроданность / возврат к среднему ───────
+    rsi = _fv("rsi")
+    rsi_prev = _fv_prev("rsi")
+    if rsi is not None:
+        if rsi >= 70:
+            reasons.append(f"RSI = {rsi:.0f} — зона перекупленности: возможен откат или разворот вниз")
+        elif rsi <= 30:
+            reasons.append(f"RSI = {rsi:.0f} — зона перепроданности: возможен отскок или разворот вверх")
+        elif 45 <= rsi <= 55:
+            reasons.append(f"RSI = {rsi:.0f} — нейтральная зона: направленного сигнала нет")
+        else:
+            if rsi_prev is not None:
+                if rsi > 50 and rsi_prev <= 50:
+                    reasons.append(f"RSI = {rsi:.0f} — пересёк уровень 50 снизу вверх: смена импульса на бычий")
+                elif rsi < 50 and rsi_prev >= 50:
+                    reasons.append(f"RSI = {rsi:.0f} — пересёк уровень 50 сверху вниз: смена импульса на медвежий")
+                elif rsi > 50:
+                    reasons.append(f"RSI = {rsi:.0f} — в бычьей зоне (выше 50)")
+                else:
+                    reasons.append(f"RSI = {rsi:.0f} — в медвежьей зоне (ниже 50)")
+
+    # ── 4. Bollinger Bands — возврат к среднему / выход из диапазона ──────────
+    boll = _fv("boll_b")  # 0 = нижняя полоса, 0.5 = середина, 1 = верхняя, <0 или >1 = выход
+    if boll is not None:
+        if boll > 1.0:
+            reasons.append(f"Цена вышла выше верхней полосы Боллинджера (%B={boll:.2f}) — возможен возврат к среднему")
+        elif boll < 0.0:
+            reasons.append(f"Цена вышла ниже нижней полосы Боллинджера (%B={boll:.2f}) — возможен отскок к среднему")
+        elif boll > 0.8:
+            reasons.append(f"Цена у верхней границы Боллинджера (%B={boll:.2f}) — перекупленность в диапазоне")
+        elif boll < 0.2:
+            reasons.append(f"Цена у нижней границы Боллинджера (%B={boll:.2f}) — перепроданность в диапазоне")
+
+    # ── 5. Donchian — позиция в канале (пробой / середина) ────────────────────
+    don_pos = _fv("donchian_pos")   # 0 = дно канала, 1 = верх канала
+    if don_pos is not None:
+        if don_pos >= 0.95:
+            reasons.append("Цена на 20-барном максимуме — пробой вверх / ложный пробой")
+        elif don_pos <= 0.05:
+            reasons.append("Цена на 20-барном минимуме — пробой вниз / ложный пробой")
+        elif 0.45 <= don_pos <= 0.55:
+            reasons.append("Цена в середине 20-барного канала — нет выраженного направления")
+
+    # ── 6. Объём — подтверждение движения ────────────────────────────────────
+    vol_z = _fv("vol_z")   # z-score объёма относительно 20-бар среднего
+    obv_slope = _fv("obv_slope")
+    if vol_z is not None:
+        if vol_z > 2.0:
+            reasons.append(f"Объём аномально высокий (z={vol_z:.1f}) — институциональная активность, высокая значимость движения")
+        elif vol_z > 1.0:
+            reasons.append(f"Объём выше среднего (z={vol_z:.1f}) — движение подтверждено")
+        elif vol_z < -1.0:
+            reasons.append(f"Объём ниже среднего (z={vol_z:.1f}) — низкая активность, сигнал менее надёжен")
+    if obv_slope is not None:
+        if obv_slope > 0.1:
+            reasons.append("OBV растёт — деньги заходят в инструмент (накопление)")
+        elif obv_slope < -0.1:
+            reasons.append("OBV падает — деньги выходят из инструмента (распределение)")
+
+    # ── 7. Календарный контекст ────────────────────────────────────────────────
+    weekend_prox = _fv("cal_weekend_prox")
+    if weekend_prox is not None:
+        if weekend_prox >= 1.0:
+            reasons.append("Пятница: позиции часто закрывают перед выходными — возможно снижение ликвидности")
+        elif weekend_prox >= 0.75:
+            reasons.append("Понедельник: открытие после выходных, возможен гэп или всплеск волатильности")
+
+    # ── 8. Волатильность и ширина уровней ────────────────────────────────────
+    vol_pct = round(fwd_vol * 100, 2)
+    atr_norm = _fv("atr_norm")
+    if atr_norm is not None:
+        atr_pct = round(atr_norm * 100, 2)
+        if atr_pct > 2.5:
+            reasons.append(f"Высокая волатильность (ATR={atr_pct:.1f}% от цены) — широкие уровни SL/TP, повышенный риск")
+        elif atr_pct < 0.5:
+            reasons.append(f"Низкая волатильность (ATR={atr_pct:.1f}% от цены) — узкие уровни SL/TP, сжатие диапазона")
+        else:
+            reasons.append(f"Умеренная волатильность (ATR={atr_pct:.1f}% от цены)")
+
+    # ── 9. Ожидаемая доходность ───────────────────────────────────────────────
+    if abs(fwd_ret) > 0.0001:
+        ret_pct = round(fwd_ret * 100, 2)
+        reasons.append(
+            f"Прогнозируемая доходность за {cfg.horizon} баров: "
+            f"{'+'if ret_pct>0 else ''}{ret_pct}%"
+        )
+
+    return reasons
+
+
 def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
     """Берёт последнее окно данных и выдаёт сигнал входа/стопа/тейка."""
     model, scaler = load_artifacts(cfg)
@@ -1350,12 +1619,16 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
     price = float(df["close"].iloc[-1])
     atr = float(feats["atr"].iloc[-1])
 
-    # Клэмпим ATR: не менее 0.1% и не более 5% от цены
-    atr_clamped = float(np.clip(atr, 0.001 * price, 0.05 * price))
+    # Клэмпим ATR: не менее 0.1% и не более 3% от цены
+    atr_clamped = float(np.clip(atr, 0.001 * price, 0.03 * price))
     offset = cfg.entry_offset_mult  # смещение ордера
 
-    # SL/TP: берём максимум из ATR и прогнозируемой волатильности (fwd_vol в ед. цены)
-    vol_abs = max(fwd_vol * price, 0.2 * atr_clamped)
+    # fwd_vol — относительная волатильность (доля от цены), клэмпим до разумного диапазона
+    # Максимум 2% в абсолютном выражении, чтобы SL не был огромным
+    vol_frac = float(np.clip(fwd_vol, 0.001, 0.02))
+    vol_abs  = max(vol_frac * price, 0.2 * atr_clamped)
+    # Итоговый vol_abs не может превышать 2% от цены
+    vol_abs  = min(vol_abs, 0.02 * price)
     sl_dist = cfg.sl_atr_mult * vol_abs
     tp_dist = cfg.tp_atr_mult * vol_abs
 
@@ -1364,13 +1637,21 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
     order_type = "MARKET"
 
     if offset > 0:
-        # Отложенный ордер: фильтруем по p_fill * p_direction >= threshold
+        # Стоп-ордер: вход выше рынка (BUYSTOP) или ниже (SELLSTOP) — подтверждение импульса
         if p_up * p_fill >= cfg.prob_threshold * cfg.fill_prob_threshold and fwd_ret > 0:
             direction = "LONG"
             order_type = "BUYSTOP"
         elif (1 - p_up) * p_fill >= cfg.prob_threshold * cfg.fill_prob_threshold and fwd_ret < 0:
             direction = "SHORT"
             order_type = "SELLSTOP"
+    elif offset < 0:
+        # Лимитный ордер: вход ниже рынка для лонга (LIMIT_BUY) / выше для шорта (LIMIT_SELL)
+        if p_up * p_fill >= cfg.prob_threshold * cfg.fill_prob_threshold and fwd_ret > 0:
+            direction = "LONG"
+            order_type = "LIMIT_BUY"
+        elif (1 - p_up) * p_fill >= cfg.prob_threshold * cfg.fill_prob_threshold and fwd_ret < 0:
+            direction = "SHORT"
+            order_type = "LIMIT_SELL"
     else:
         # Маркет-вход (оригинальная логика)
         if p_up >= cfg.prob_threshold and fwd_ret > 0:
@@ -1392,11 +1673,11 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         order_type = "MARKET"
 
     if direction == "LONG":
-        entry = price + offset * atr_clamped if offset > 0 else price
+        entry = price + offset * atr_clamped if offset != 0 else price  # >0: стоп выше; <0: лимит ниже
         sl = entry - sl_dist
         tp = entry + tp_dist
     elif direction == "SHORT":
-        entry = price - offset * atr_clamped if offset > 0 else price
+        entry = price - offset * atr_clamped if offset != 0 else price  # >0: стоп ниже; <0: лимит выше
         sl = entry + sl_dist
         tp = entry - tp_dist
     else:
@@ -1422,6 +1703,17 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         except Exception:
             fill_deadline = None
 
+    explanation = _build_signal_explanation(
+        direction=direction,
+        p_up=p_up,
+        fwd_ret=fwd_ret,
+        fwd_vol=fwd_vol,
+        raw_rr=raw_rr,
+        cfg=cfg,
+        feats=feats,
+        df=df,
+    )
+
     signal = {
         "time": str(bar_index),
         "symbol": cfg.symbol,
@@ -1438,6 +1730,7 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
         "confidence": round(max(p_up, 1 - p_up), 3),
         "fill_deadline": fill_deadline,
         "entry_offset_atr": round(offset * atr_clamped, 4) if offset > 0 else 0,
+        "explanation": explanation,
     }
     return signal
 
@@ -1466,6 +1759,20 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     _outs = model.predict(window, verbose=0)
     p_up, fwd_ret, fwd_vol = [float(o[0, 0]) for o in _outs[:3]]
 
+    # ── OOS AUC из сохранённых метрик ────────────────────────────────────────
+    # resolve_model_tag возвращает фактический тег модели (может отличаться от cfg.tag)
+    oos_auc = None
+    try:
+        _actual_tag = resolve_model_tag(cfg.symbol, cfg.interval, cfg.model_dir,
+                                        active_tags=active_tags or None)
+        _metrics_p = os.path.join(cfg.model_dir, f"{_actual_tag}_metrics.json")
+        if os.path.exists(_metrics_p):
+            with open(_metrics_p) as _f:
+                _m = json.load(_f)
+            oos_auc = _m.get("val_auc")
+    except Exception:
+        oos_auc = None
+
     price0 = float(df["close"].iloc[-1])
     per_bar_vol = max(fwd_vol, 1e-4)
     H = max(cfg.horizon, 1)
@@ -1473,16 +1780,27 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     # сигнал (та же логика, что в predict_signal) — через общий вызов
     sig = predict_signal(cfg, df)
 
-    # ── Pivot Points — период агрегации зависит от таймфрейма ─────────────────
-    # D1  → High/Low/Close за последний месяц  (~22 торговых дня)
-    # H4  → за последнюю неделю               (~5 дней × 6 баров = 30 баров)
-    # H1  → за последний день                 (~24 бара)
-    # иное → последняя свеча (fallback)
-    _pivot_bars = {"1d": 22, "4h": 30, "1h": 24}.get(cfg.interval, 1)
-    _pivot_slice = df.iloc[-_pivot_bars:]
-    _ph = float(_pivot_slice["high"].max())
-    _pl = float(_pivot_slice["low"].min())
-    _pc = float(_pivot_slice["close"].iloc[-1])
+    # ── Pivot Points — всегда строим по предыдущему торговому дню ────────────
+    # Для D1: предпоследняя свеча — это вчерашний день.
+    # Для внутридневных (4h, 1h и др.): берём все бары, чья дата < сегодняшней,
+    # и из них берём последний торговый день.
+    if cfg.interval == "1d":
+        _prev_day = df.iloc[-2] if len(df) >= 2 else df.iloc[-1]
+        _ph = float(_prev_day["high"])
+        _pl = float(_prev_day["low"])
+        _pc = float(_prev_day["close"])
+        _pivot_bars = 1
+    else:
+        _today_date = df.index[-1].date() if hasattr(df.index[-1], "date") else pd.Timestamp(df.index[-1]).date()
+        _prev_bars = df[pd.DatetimeIndex(df.index).date < _today_date]
+        if len(_prev_bars) == 0:
+            _prev_bars = df.iloc[:-1]
+        _last_prev_date = pd.DatetimeIndex(_prev_bars.index).date[-1]
+        _prev_day_bars = _prev_bars[pd.DatetimeIndex(_prev_bars.index).date == _last_prev_date]
+        _ph = float(_prev_day_bars["high"].max())
+        _pl = float(_prev_day_bars["low"].min())
+        _pc = float(_prev_day_bars["close"].iloc[-1])
+        _pivot_bars = len(_prev_day_bars)
     _pp  = (_ph + _pl + _pc) / 3
     _r1  = 2 * _pp - _pl
     _r2  = _pp + (_ph - _pl)
@@ -1498,53 +1816,69 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
     }
 
     # ── Прогнозные свечи ──────────────────────────────────────────────────────
-    # Паттерн направлений: по тренду с периодическими коррекциями.
-    # Свечи «притягиваются» к ближайшему уровню пивота (PP/R1..R3/S1..S3),
-    # имитируя реальное поведение цены у значимых уровней.
-    _bull_trend = fwd_ret >= 0
-    _pattern = [True, True, False, True, True, True, False, True,
-                False, True, True, False, True, True, False]
-    # все уровни пивота в виде sorted-списка для поиска ближайшего
+    _has_trade  = sig["direction"] in ("LONG", "SHORT")
+    _bull_trend = (sig["direction"] == "LONG") if _has_trade else (fwd_ret >= 0)
+    _tp_price   = sig["take_profit"] if _has_trade else price0 * (1 + fwd_ret)
+
+    # Паттерн чередования свечей по тренду / против тренда (коррекции).
+    # True = свеча по тренду, False = коррекция.
+    # Примерно 2/3 по тренду, 1/3 против — реалистично для трендового движения.
+    _pattern = [True, True, False, True, True, False, True, False,
+                True, True, True, False, True, False, True]
     _pivot_vals = sorted([_s3, _s2, _s1, _pp, _r1, _r2, _r3])
 
-    prev_h = _ph
-    prev_l = _pl
     prev_c = price0
+    _atr_raw = float(feats["atr"].iloc[-1]) if "atr" in feats.columns else price0 * 0.01
+    atr_clamped = float(np.clip(_atr_raw, 0.001 * price0, 0.03 * price0))
+    _atr_bar = atr_clamped if atr_clamped > 0 else abs(_tp_price - price0) * 0.15
+
+    rng = np.random.default_rng(42)   # детерминированный шум
+
     path = []
     for t in range(1, steps + 1):
-        frac = min(t / H, 1.0)
-        mid  = price0 * (1 + fwd_ret * frac)
+        frac = t / steps
+        # Целевая цена на этом шаге — плавная интерполяция к TP
+        mid  = price0 + (_tp_price - price0) * frac
         band = band_k * per_bar_vol * (t ** 0.5)
 
-        # пивот от текущего prev_h/prev_l/prev_c
-        pp  = (prev_h + prev_l + prev_c) / 3
-        r1  = 2 * pp - prev_l
-        s1  = 2 * pp - prev_h
-        rng = max(r1 - s1, prev_c * 0.001)
-
         with_trend = _pattern[(t - 1) % len(_pattern)]
-        is_bull    = with_trend == _bull_trend
+        # is_bull: True если свеча закрывается выше open
+        is_bull = with_trend if _bull_trend else (not with_trend)
 
-        # ближайший уровень глобального пивота к mid — свеча «магнетится» к нему
+        # Размах тела: по тренду — крупнее, против — меньше
+        body_mult  = 0.55 if with_trend else 0.30
+        # Небольшой случайный множитель ±20% для живости
+        noise      = float(rng.uniform(0.80, 1.20))
+        body_size  = _atr_bar * body_mult * noise * max(0.5, 1.0 - frac * 0.4)
+
+        bar_open = prev_c
+        # Сырое смещение тела
+        raw_close = prev_c + (body_size if is_bull else -body_size)
+        # Притягиваем к траектории mid: сила притяжения растёт ближе к концу
+        pull = 0.45 + frac * 0.35
+        bar_close = raw_close * (1 - pull) + mid * pull
+
+        # Небольшое притяжение к ближайшему уровню пивота
         nearest_pivot = min(_pivot_vals, key=lambda v: abs(v - mid))
+        bar_close = bar_close * 0.94 + nearest_pivot * 0.06
 
-        if is_bull:
-            bar_open  = pp - rng * 0.15
-            bar_close = pp + rng * 0.35
-        else:
-            bar_open  = pp + rng * 0.15
-            bar_close = pp - rng * 0.35
+        # Последняя свеча точно приходит к TP
+        if t == steps:
+            bar_close = _tp_price
 
-        # pull к mid, с лёгким притяжением к ближайшему уровню пивота
-        pull = 0.6 if with_trend else 0.25
-        target = mid * 0.75 + nearest_pivot * 0.25   # mid доминирует, пивот корректирует
-        bar_close = bar_close * (1 - pull) + target * pull
-        bar_open  = prev_c * 0.5 + pp * 0.5
+        # Фитили: верхний и нижний, небольшие (15-30% от тела)
+        body_abs = abs(bar_close - bar_open)
+        wick_top = body_abs * float(rng.uniform(0.10, 0.30))
+        wick_bot = body_abs * float(rng.uniform(0.10, 0.30))
+        bar_high = max(bar_open, bar_close) + wick_top
+        bar_low  = min(bar_open, bar_close) - wick_bot
 
-        bar_high = max(bar_open, bar_close) + rng * 0.20
-        bar_low  = min(bar_open, bar_close) - rng * 0.20
-        bar_high = max(bar_high, bar_open, bar_close)
-        bar_low  = min(bar_low,  bar_open, bar_close)
+        # Последняя свеча: фитиль обязательно достигает TP
+        if t == steps:
+            if _bull_trend:
+                bar_high = max(bar_high, _tp_price)
+            else:
+                bar_low  = min(bar_low,  _tp_price)
 
         path.append({
             "step":  t,
@@ -1556,7 +1890,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
             "low":   round(bar_low,   2),
             "close": round(bar_close, 2),
         })
-        prev_h, prev_l, prev_c = bar_high, bar_low, bar_close
+        prev_c = bar_close
 
     hist = df.iloc[-history:]
     history_pts = [
@@ -1579,6 +1913,7 @@ def forecast(cfg: Config, steps: int = 10, history: int = 50,
         "forecast": path,
         "pivot_levels": pivot_levels,
         "signal": sig,
+        "oos_auc": oos_auc,
         "levels": {
             "direction": sig["direction"],
             "entry": sig["entry"],
@@ -1655,6 +1990,76 @@ def get_model_metrics(tag: str, model_dir: str = "models") -> dict | None:
             return json.load(f)
     except Exception:
         return None
+
+
+FEATURE_GROUPS = {
+    "Тренд": ["sma_5", "sma_10", "sma_20", "ema_12", "ema_26", "macd", "macd_sig"],
+    "Импульс": ["rsi", "stoch_rsi_k", "stoch_rsi_d", "williams_r"],
+    "Волатильность": ["atr_norm", "boll_b", "garch_h", "har_rv", "vol_chg", "vol_z"],
+    "Объём": ["obv_z", "obv_slope"],
+    "Канал": ["donchian_pos", "donchian_width", "close_pos"],
+    "HTF (старший ТФ)": ["htf_macd", "htf_sma_10", "htf_rsi", "htf_vol_z",
+                          "htf_ema_12", "htf_ema_26", "htf_atr_norm"],
+    "Доходность": ["ret_1", "ret_5", "ret_10"],
+    "Календарные": ["cal_dow_sin", "cal_dow_cos", "cal_month_sin", "cal_month_cos",
+                    "cal_weekend_prox", "cal_hour_sin", "cal_hour_cos", "cal_session_pos"],
+    "Относительная сила": ["rs_z", "rs_slope"],
+}
+
+
+def get_all_feature_names(interval: str = "1d") -> dict[str, list[str]]:
+    """Возвращает словарь группа→список_признаков, используя синтетические данные."""
+    import numpy.random as npr
+    n = 200
+    np.random.seed(0)
+    dates = pd.date_range("2020-01-01", periods=n, freq="B")
+    price = 100 * np.exp(np.cumsum(npr.randn(n) * 0.01))
+    df = pd.DataFrame({
+        "open":   price * (1 + npr.randn(n) * 0.002),
+        "high":   price * (1 + np.abs(npr.randn(n) * 0.005)),
+        "low":    price * (1 - np.abs(npr.randn(n) * 0.005)),
+        "close":  price,
+        "volume": npr.randint(1000, 10000, n).astype(float),
+    }, index=dates)
+    try:
+        feats = add_features(df, interval=interval)
+    except Exception:
+        feats = df
+    exclude = {"open", "high", "low", "close", "volume", "atr"}
+    all_cols = [c for c in feats.columns if c not in exclude]
+
+    # группируем по FEATURE_GROUPS, остальные — в "Прочие"
+    result = {}
+    assigned = set()
+    for group, members in FEATURE_GROUPS.items():
+        present = [m for m in members if m in all_cols]
+        if present:
+            result[group] = present
+            assigned.update(present)
+    other = [c for c in all_cols if c not in assigned]
+    if other:
+        result["Прочие"] = other
+    return result
+
+
+def get_model_excluded_features(tag: str, model_dir: str = "models") -> list[str]:
+    cfg_path = os.path.join(model_dir, f"{tag}_config.json")
+    if not os.path.exists(cfg_path):
+        return []
+    with open(cfg_path) as f:
+        data = json.load(f)
+    return data.get("excluded_features", [])
+
+
+def set_model_excluded_features(tag: str, excluded: list[str], model_dir: str = "models") -> None:
+    cfg_path = os.path.join(model_dir, f"{tag}_config.json")
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(f"Конфиг модели {tag} не найден")
+    with open(cfg_path) as f:
+        data = json.load(f)
+    data["excluded_features"] = excluded
+    with open(cfg_path, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def get_all_metrics(model_dir: str = "models") -> list[dict]:

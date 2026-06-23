@@ -15,10 +15,127 @@ import Screener from "@/components/Screener";
 import Subscriptions from "@/components/Subscriptions";
 import RetrainingPanel from "@/components/RetrainingPanel";
 import ModelMetrics from "@/components/ModelMetrics";
+import FeatureEditor from "@/components/FeatureEditor";
 import SymbolInput from "@/components/SymbolInput";
 import WalkForwardChart from "@/components/WalkForwardChart";
 
-const DEFAULT_INTERVALS = ["1d", "4h", "1h"];
+const DEFAULT_INTERVALS = ["1d", "4h"];
+
+// ── Вердикт walk-forward + кнопка активации ───────────────────────────────────
+function WfVerdictPanel({ result, symbol, interval }) {
+  const v = result?.verdict;
+  const ov = result?.overall || {};
+  const [minPf, setMinPf]       = useState(1.3);
+  const [minRf, setMinRf]       = useState(2.0);
+  const [minWr, setMinWr]       = useState(45);   // в процентах
+  const [minTrades, setMinTrades] = useState(10);
+  const [status, setStatus]     = useState(null); // {ok, activated, reason, forced}
+  const [loading, setLoading]   = useState(false);
+
+  const pf = ov.profit_factor ?? 0;
+  const rf = ov.recovery_factor ?? 0;
+  const wr = (ov.win_rate ?? 0) * 100;
+  const n  = ov.n_trades ?? 0;
+
+  const passes = {
+    pf: pf >= minPf, rf: rf >= minRf, wr: wr >= minWr, n: n >= minTrades,
+  };
+  const allPass = passes.pf && passes.rf && passes.wr && passes.n;
+
+  async function activate(force = false) {
+    setLoading(true); setStatus(null);
+    try {
+      const r = await api.activateByWf({
+        symbol, interval,
+        min_pf: minPf, min_rf: minRf, min_wr: minWr / 100, min_trades: minTrades,
+        force,
+      });
+      setStatus(r);
+    } catch (e) { setStatus({ error: e.message }); }
+    setLoading(false);
+  }
+
+  const thRow = (label, val, threshold, pass, fmt = v => v.toFixed(2)) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderBottom: "1px solid var(--line-soft)" }}>
+      <span style={{ width: 130, fontSize: 12, color: "var(--muted)" }}>{label}</span>
+      <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, width: 70,
+                     color: pass ? "var(--long)" : "var(--short)" }}>
+        {fmt(val)}
+      </span>
+      <span style={{ fontSize: 11, color: "var(--muted-2)" }}>порог ≥</span>
+      <input type="number" step="0.1" value={threshold.val}
+        onChange={e => threshold.set(parseFloat(e.target.value) || 0)}
+        style={{ width: 60, fontFamily: "var(--mono)", fontSize: 12, padding: "2px 6px",
+                 borderRadius: 6, border: "1px solid var(--line)", background: "var(--ink-2)",
+                 color: "var(--text)" }} />
+      <span style={{ fontSize: 14, marginLeft: 4 }}>{pass ? "✓" : "✗"}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ marginTop: 22, borderRadius: 12, border: `2px solid ${allPass ? "var(--long)" : "var(--short)"}`,
+                  background: allPass ? "rgba(16,185,129,.06)" : "rgba(239,68,68,.06)", padding: "16px 20px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: allPass ? "var(--long)" : "var(--short)" }}>
+          {allPass ? "✓ Модель ПРОШЛА фильтр" : "✗ Модель НЕ ПРОШЛА фильтр"}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginLeft: "auto" }}>
+          Настройте пороги и проверьте — подходит ли модель для торговли
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        {thRow("Profit Factor", pf, { val: minPf, set: setMinPf }, passes.pf)}
+        {thRow("Recovery Factor", rf, { val: minRf, set: setMinRf }, passes.rf)}
+        {thRow("Win Rate", wr, { val: minWr, set: setMinWr }, passes.wr, v => v.toFixed(0) + "%")}
+        {thRow("Мин. сделок", n, { val: minTrades, set: setMinTrades }, passes.n, v => String(Math.round(v)))}
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button
+          onClick={() => activate(false)}
+          disabled={loading || !allPass}
+          style={{
+            padding: "8px 20px", borderRadius: 9, fontSize: 13, fontWeight: 700,
+            cursor: allPass ? "pointer" : "not-allowed",
+            border: "none", background: allPass ? "var(--long)" : "var(--muted-2)", color: "#fff",
+          }}
+        >
+          {loading ? "…" : "Активировать модель"}
+        </button>
+        {!allPass && (
+          <button
+            onClick={() => activate(true)}
+            disabled={loading}
+            style={{
+              padding: "8px 18px", borderRadius: 9, fontSize: 12, fontWeight: 600,
+              cursor: "pointer", border: "1px solid var(--line)",
+              background: "transparent", color: "var(--muted)",
+            }}
+          >
+            Активировать принудительно
+          </button>
+        )}
+      </div>
+
+      {status && (
+        <div style={{
+          marginTop: 12, padding: "10px 14px", borderRadius: 8, fontSize: 13,
+          background: status.error ? "rgba(239,68,68,.1)" : status.activated ? "rgba(16,185,129,.1)" : "rgba(245,158,11,.1)",
+          color: status.error ? "var(--short)" : status.activated ? "var(--long)" : "var(--amber, #f59e0b)",
+          border: `1px solid ${status.error ? "var(--short)" : status.activated ? "var(--long)" : "var(--amber, #f59e0b)"}`,
+        }}>
+          {status.error
+            ? `Ошибка: ${status.error}`
+            : status.activated
+              ? `✓ Модель активирована${status.forced ? " (принудительно)" : ""}. Тег: ${status.tag}`
+              : `✗ ${status.reason}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function Field({ label, children }) {
   return (
@@ -128,11 +245,11 @@ export default function Dashboard() {
   const [assetClasses, setAssetClasses] = useState(null);
   const [activeClass, setActiveClass] = useState("stocks");
   const [classTrainParams, setClassTrainParams] = useState({
-    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
-    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
-    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
-    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
-    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
+    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
+    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
+    forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
+    commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
 
   const [train, setTrain] = useState({
@@ -278,6 +395,7 @@ export default function Dashboard() {
         horizon: +(p.horizon || 10),
         lookback: +(p.lookback || 32),
         direction_filter: p.direction_filter || "both",
+        excluded_features: p.excluded_features || [],
       });
       watch(r.job_id);
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -302,11 +420,39 @@ export default function Dashboard() {
     } catch (e) { setErr(e.message); }
   }
 
-  function viewSignalChart(s) {
+  async function viewSignalChart(s) {
     if (!s.forecast_json) return;
     try {
       const data = JSON.parse(s.forecast_json);
-      setHistoryFc({ ...data, signal_id: s.id });
+      const explanation = s.explanation_json ? JSON.parse(s.explanation_json) : null;
+      const signal = data.signal || null;
+      const signalWithExpl = signal
+        ? { ...signal, explanation: explanation || signal.explanation }
+        : explanation ? { explanation } : null;
+
+      // Определяем дату последнего исторического бара прогноза
+      const history = data.history || [];
+      const fromTime = history.length > 0 ? history[history.length - 1].time : s.signal_time || s.created_at;
+      const steps = (data.forecast || []).length || 10;
+
+      // Сразу показываем без реальных данных, потом дозагружаем
+      const baseEntry = {
+        ...data,
+        signal: signalWithExpl,
+        signal_id: s.id,
+        symbol: s.symbol,
+        interval: s.interval,
+        actuals: [],
+      };
+      setHistoryFc(baseEntry);
+
+      // Загружаем реальные бары асинхронно
+      try {
+        const res = await api.getActuals({ symbol: s.symbol, interval: s.interval, from_time: fromTime, steps });
+        if (res.bars?.length) {
+          setHistoryFc(prev => prev?.signal_id === s.id ? { ...prev, actuals: res.bars } : prev);
+        }
+      } catch {}
     } catch {}
   }
 
@@ -317,6 +463,11 @@ export default function Dashboard() {
   // Feature importance
   const [fi, setFi] = useState(null);
   const [fiLoading, setFiLoading] = useState(false);
+  const [featEditorOpen, setFeatEditorOpen] = useState(false);
+  const [fiOptApplied, setFiOptApplied] = useState(false); // флаг анимации кнопки
+  // при оптимизации — передаём конкретный список excluded в FeatureEditor через отдельный проп
+  // null = не применять (FeatureEditor сам управляет), массив = применить снаружи
+  const [featExcludedOverride, setFeatExcludedOverride] = useState(null);
 
   async function startFeatureImportance() {
     setErr(""); setBusy(true); setJob(null); setFi(null);
@@ -337,6 +488,25 @@ export default function Dashboard() {
       setFi(r);
     } catch (e) { setErr(e.message); }
     setFiLoading(false);
+  }
+
+  function applyFiOptimization(threshold = 0.005) {
+    const data = fi || fiResult;
+    if (!data) return;
+    const features = data.features || data.top10 || [];
+    // признаки с importance <= threshold — исключаем
+    const excluded = features
+      .filter(f => f.importance <= threshold)
+      .map(f => f.feature);
+    // обновляем classTrainParams для передачи в запрос обучения
+    setClassTrainParams(p => ({
+      ...p, [activeClass]: { ...p[activeClass], excluded_features: excluded }
+    }));
+    // передаём override в FeatureEditor (сбрасывается после применения через onOverrideApplied)
+    setFeatExcludedOverride(excluded);
+    setFeatEditorOpen(true);
+    setFiOptApplied(true);
+    setTimeout(() => setFiOptApplied(false), 2000);
   }
 
   if (!userLoaded) return (
@@ -471,8 +641,9 @@ export default function Dashboard() {
             </label>
             <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
               <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
-              {[["0", "Маркет"], ["0.3", "BUYSTOP/SELLSTOP"]].map(([val, label]) => (
+              {[["0", "Маркет", "вход по рынку"], ["0.3", "Стоп", "выше/ниже рынка"], ["-0.3", "Лимит", "лучшая цена на откате"]].map(([val, label, hint]) => (
                 <button key={val} type="button"
+                  title={hint}
                   onClick={() => setTrain({ ...train, entry_offset_mult: val })}
                   style={{
                     padding: "5px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
@@ -484,9 +655,6 @@ export default function Dashboard() {
                   }}
                 >{label}</button>
               ))}
-              {+train.entry_offset_mult === 0 && (
-                <span style={{ fontSize: 11, color: "var(--long)" }}>↑ рекомендуется для первого обучения</span>
-              )}
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button className="btn" onClick={startTrain} disabled={busy || !online}>
@@ -677,28 +845,63 @@ export default function Dashboard() {
                   );
                 })}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px", flexWrap: "wrap" }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>Тип входа:</span>
-                {[["0", "Маркет"], ["0.3", "BUYSTOP/SELLSTOP"]].map(([val, label]) => {
+                {[["0", "Маркет", "вход по рынку"], ["0.3", "Стоп", "выше/ниже рынка"], ["-0.3", "Лимит", "лучшая цена на откате"]].map(([val, label, hint]) => {
                   const cur = String(classTrainParams[activeClass]?.entry_offset_mult ?? 0);
+                  const active = cur == val;
                   return (
                     <button key={val} type="button"
+                      title={hint}
                       onClick={() => setClassTrainParams(p => ({
                         ...p, [activeClass]: { ...p[activeClass], entry_offset_mult: val }
                       }))}
                       style={{
                         padding: "5px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
                         fontFamily: "var(--body)", fontWeight: 500,
-                        border: `1px solid ${cur == val ? "var(--primary)" : "var(--line)"}`,
-                        background: cur == val ? "var(--primary)" : "transparent",
-                        color: cur == val ? "#fff" : "var(--muted)",
+                        border: `1px solid ${active ? "var(--primary)" : "var(--line)"}`,
+                        background: active ? "var(--primary)" : "transparent",
+                        color: active ? "#fff" : "var(--muted)",
                         transition: "all .15s",
                       }}
                     >{label}</button>
                   );
                 })}
               </div>
-              <div style={{ display: "flex", gap: 10 }}>
+              {/* Управление признаками */}
+              <div style={{ marginTop: 14, borderRadius: 10, border: "1px solid var(--line)", overflow: "hidden" }}>
+                <button type="button"
+                  onClick={() => setFeatEditorOpen(v => !v)}
+                  style={{
+                    width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "10px 14px", background: "var(--ink-2)", border: "none", cursor: "pointer",
+                    fontSize: 13, fontFamily: "var(--body)", fontWeight: 600, color: "var(--text)",
+                  }}>
+                  <span>Управление признаками</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {(classTrainParams[activeClass]?.excluded_features?.length || 0) > 0 && (
+                      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "var(--primary)", color: "#fff" }}>
+                        -{classTrainParams[activeClass]?.excluded_features?.length} откл.
+                      </span>
+                    )}
+                    <span style={{ fontSize: 11, color: "var(--muted-2)" }}>{featEditorOpen ? "▲" : "▼"}</span>
+                  </span>
+                </button>
+                {featEditorOpen && (
+                  <div style={{ padding: "12px 14px", borderTop: "1px solid var(--line)" }}>
+                    <FeatureEditor
+                      interval={classTrainParams[activeClass]?.interval || "1d"}
+                      excludedValue={featExcludedOverride}
+                      onOverrideApplied={() => setFeatExcludedOverride(null)}
+                      onChange={(excl) => setClassTrainParams(p => ({
+                        ...p, [activeClass]: { ...p[activeClass], excluded_features: excl }
+                      }))}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
                 <button className="btn" onClick={startClassTrain} disabled={busy || !online}>
                   {busy && job?.kind === "train_universal" ? "Обучение…" : `Обучить модель «${assetClasses?.[activeClass]?.label || activeClass}»`}
                 </button>
@@ -727,7 +930,7 @@ export default function Dashboard() {
               Permutation importance: насколько ухудшается AUC модели при случайном перемешивании каждого признака.
               Чем больше значение — тем важнее признак.
             </p>
-            <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
               <button className="btn" style={{ width: "auto", padding: "9px 22px" }}
                 onClick={startFeatureImportance} disabled={busy || !online}>
                 {busy && job?.kind === "feature_importance" ? "Считаю…" : "Рассчитать"}
@@ -736,11 +939,25 @@ export default function Dashboard() {
                 onClick={loadFeatureImportance} disabled={fiLoading}>
                 {fiLoading ? "Загрузка…" : "Загрузить последний"}
               </button>
+              {(fi || fiResult) && (
+                <button
+                  onClick={() => applyFiOptimization(0.005)}
+                  style={{
+                    width: "auto", padding: "9px 22px", borderRadius: 10, cursor: "pointer",
+                    border: "none", fontFamily: "var(--body)", fontSize: 13, fontWeight: 600,
+                    background: fiOptApplied ? "var(--long)" : "var(--primary)",
+                    color: "#fff", transition: "background .3s",
+                  }}
+                >
+                  {fiOptApplied ? "✓ Применено" : "⚡ Оптимизация"}
+                </button>
+              )}
             </div>
 
             {(fi || fiResult) && (() => {
               const data = fi || fiResult;
               const features = data.features || data.top10 || [];
+              const THRESHOLD = 0.005;
               const topN = features.slice(0, 20);
               const maxImp = Math.max(...topN.map(f => Math.abs(f.importance)), 0.0001);
               return (
@@ -748,23 +965,47 @@ export default function Dashboard() {
                   {data.base_auc != null && (
                     <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
                       Base AUC: <strong>{data.base_auc}</strong>
+                      <span style={{ marginLeft: 14, color: "var(--muted-2)" }}>
+                        Порог оптимизации: importance &gt; {THRESHOLD}
+                        {" · "}
+                        оставить {features.filter(f => f.importance > THRESHOLD).length} из {features.length}
+                      </span>
                     </div>
                   )}
                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    {topN.map((f) => (
-                      <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <div style={{ width: 22, fontSize: 11, color: "var(--muted)", textAlign: "right", flexShrink: 0 }}>{f.rank}</div>
-                        <div style={{ width: 160, fontSize: 12, fontFamily: "var(--mono)", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.feature}</div>
-                        <div style={{ flex: 1, height: 16, background: "var(--ink-2)", borderRadius: 3, overflow: "hidden" }}>
-                          <div style={{ height: "100%", borderRadius: 3, width: `${Math.abs(f.importance) / maxImp * 100}%`, background: f.importance > 0 ? "var(--primary)" : "var(--short)", transition: "width .3s" }} />
+                    {topN.map((f) => {
+                      const weak = f.importance <= THRESHOLD;
+                      return (
+                        <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10, opacity: weak ? 0.4 : 1 }}>
+                          <div style={{ width: 22, fontSize: 11, color: "var(--muted)", textAlign: "right", flexShrink: 0 }}>{f.rank}</div>
+                          <div style={{
+                            width: 160, fontSize: 12, fontFamily: "var(--mono)", flexShrink: 0,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                            textDecoration: weak ? "line-through" : "none",
+                          }}>{f.feature}</div>
+                          <div style={{ flex: 1, height: 16, background: "var(--ink-2)", borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{
+                              height: "100%", borderRadius: 3,
+                              width: `${Math.abs(f.importance) / maxImp * 100}%`,
+                              background: f.importance > THRESHOLD ? "var(--primary)" : "var(--muted-2)",
+                              transition: "width .3s",
+                            }} />
+                          </div>
+                          <div style={{
+                            width: 60, fontSize: 11, fontFamily: "var(--mono)", textAlign: "right", flexShrink: 0,
+                            color: f.importance > THRESHOLD ? "var(--long)" : "var(--muted-2)",
+                          }}>
+                            {f.importance > 0 ? "+" : ""}{f.importance.toFixed(4)}
+                          </div>
                         </div>
-                        <div style={{ width: 60, fontSize: 11, fontFamily: "var(--mono)", color: f.importance > 0 ? "var(--long)" : "var(--short)", textAlign: "right", flexShrink: 0 }}>
-                          {f.importance > 0 ? "+" : ""}{f.importance.toFixed(4)}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                  {features.length > 20 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>Показано 20 из {features.length} признаков</div>}
+                  {features.length > 20 && (
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                      Показано 20 из {features.length} признаков
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -834,6 +1075,9 @@ export default function Dashboard() {
                 <MetricGrid overall={btResult.overall} />
               </div>
               <EquityChart curve={btResult.equity_curve} />
+
+              {/* Вердикт и активация модели */}
+              <WfVerdictPanel result={btResult} symbol={bt.symbol} interval={bt.interval} />
             </div>
           ) : null}
         </>
@@ -905,43 +1149,57 @@ export default function Dashboard() {
 
       {tab === "signal" && (
         <>
-          <div className="grid">
-            <div className="card">
-              <h2>Прогноз и сигнал</h2>
-              <div className="row2">
-                <Field label="Инструмент"><SymbolInput value={pred.symbol} instruments={instruments} onChange={v => setPred({ ...pred, symbol: v })} /></Field>
-                <Field label="Таймфрейм">
-                  <select value={pred.interval} onChange={(e) => setPred({ ...pred, interval: e.target.value })}>
-                    {intervals.map((i) => <option key={i}>{i}</option>)}
-                  </select>
-                </Field>
+          <div className="card" style={{ marginBottom: 18 }}>
+            <h2>Прогноз и сигнал</h2>
+            <div className="row2" style={{ marginBottom: 12 }}>
+              <Field label="Инструмент"><SymbolInput value={pred.symbol} instruments={instruments} onChange={v => setPred({ ...pred, symbol: v })} /></Field>
+              <Field label="Таймфрейм">
+                <select value={pred.interval} onChange={(e) => setPred({ ...pred, interval: e.target.value })}>
+                  {intervals.map((i) => <option key={i}>{i}</option>)}
+                </select>
+              </Field>
+            </div>
+            <button className="btn" onClick={getSignal} disabled={busy || !online}>
+              {busy ? "Запрос…" : "Запросить прогноз"}
+            </button>
+            {err ? <div className="error">{err}</div> : null}
+          </div>
+
+          {(fc || signal) && (
+            <div className="card" style={{ marginBottom: 18 }}>
+              {fc && <ForecastChart data={fc} isAdmin={isAdmin} />}
+              {signal && !fc && (
+                <>
+                  <h2>Торговый тикет</h2>
+                  <SignalTicket signal={signal} />
+                </>
+              )}
+              <div style={{
+                marginTop: 20, paddingTop: 20,
+                borderTop: "1px solid var(--line-soft)",
+              }}>
+                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
+                <AIAnalysis
+                  symbol={pred.symbol}
+                  signal={signal}
+                  quota={aiQuota}
+                  onQuotaUpdate={setAiQuota}
+                />
               </div>
-              <button className="btn" onClick={getSignal} disabled={busy || !online}>
-                {busy ? "Запрос…" : "Запросить прогноз"}
-              </button>
-              {err ? <div className="error">{err}</div> : null}
             </div>
+          )}
 
-            <div className="card">
-              <h2>Торговый тикет</h2>
-              <SignalTicket signal={signal} />
+          {!fc && !signal && (
+            <div className="card" style={{ marginBottom: 18 }}>
+              <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
+              <AIAnalysis
+                symbol={pred.symbol}
+                signal={signal}
+                quota={aiQuota}
+                onQuotaUpdate={setAiQuota}
+              />
             </div>
-          </div>
-
-          <div className="card" style={{ marginTop: 18 }}>
-            <h2>График прогноза</h2>
-            <ForecastChart data={fc} isAdmin={isAdmin} />
-          </div>
-
-          <div className="card" style={{ marginTop: 18 }}>
-            <h2>AI-аналитика</h2>
-            <AIAnalysis
-              symbol={pred.symbol}
-              signal={signal}
-              quota={aiQuota}
-              onQuotaUpdate={setAiQuota}
-            />
-          </div>
+          )}
 
           <HistoryPanel
             signals={signals}
@@ -953,10 +1211,19 @@ export default function Dashboard() {
           {historyFc && (
             <div className="card" style={{ marginTop: 18 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <h2 style={{ margin: 0 }}>График прогноза из истории</h2>
+                <h2 style={{ margin: 0 }}>Прогноз из истории</h2>
                 <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
               </div>
-              <ForecastChart data={historyFc} isAdmin={isAdmin} />
+              <ForecastChart data={historyFc} isAdmin={isAdmin} actuals={historyFc.actuals} />
+              <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
+                <h2 style={{ marginTop: 0, marginBottom: 14 }}>AI-аналитика</h2>
+                <AIAnalysis
+                  symbol={historyFc.symbol}
+                  signal={historyFc.signal}
+                  quota={aiQuota}
+                  onQuotaUpdate={setAiQuota}
+                />
+              </div>
             </div>
           )}
         </>

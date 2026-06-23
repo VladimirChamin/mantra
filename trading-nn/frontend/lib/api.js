@@ -52,6 +52,7 @@ export const api = {
     req("/api/analysis", { method: "POST", body: JSON.stringify(payload) }),
   listAnalyses: () => req("/api/analyses"),
   getAnalysis: (id) => req(`/api/analyses/${id}`),
+  deleteAnalysis: (id) => req(`/api/analyses/${id}`, { method: "DELETE" }),
   changePassword: (payload) =>
     req("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
   // Подписки на сигналы
@@ -67,6 +68,8 @@ export const api = {
   // Активные модели
   getActiveModels: () => req("/api/active_models"),
   setActiveModels: (tags) => req("/api/active_models", { method: "POST", body: JSON.stringify({ tags }) }),
+  activateByWf: (payload) => req("/api/models/activate_by_wf", { method: "POST", body: JSON.stringify(payload) }),
+  deactivateModel: (payload) => req("/api/models/deactivate", { method: "POST", body: JSON.stringify(payload) }),
   // AUC Monitor
   getModelMetrics: () => req("/api/models/metrics"),
   deleteModel: (tag) => req(`/api/models/${tag}`, { method: "DELETE" }),
@@ -74,11 +77,19 @@ export const api = {
   getAucMonitor: () => req("/api/auc_monitor"),
   setAucMonitor: (payload) => req("/api/auc_monitor", { method: "POST", body: JSON.stringify(payload) }),
   checkAucNow: () => req("/api/auc_monitor/check_now", { method: "POST" }),
+  // Feature management
+  getAllFeatures: (interval = "1d") => req(`/api/features/all?interval=${interval}`),
+  getExcludedFeatures: (tag) => req(`/api/features/${tag}`),
+  setExcludedFeatures: (tag, excluded) =>
+    req(`/api/features/${tag}`, { method: "POST", body: JSON.stringify({ excluded }) }),
   // Feature importance
   runFeatureImportance: (payload) =>
     req("/api/feature_importance", { method: "POST", body: JSON.stringify(payload) }),
   getFeatureImportance: (symbol, interval) =>
     req(`/api/feature_importance?symbol=${symbol}&interval=${interval}`),
+  // Реальные бары после прогноза (для сравнения)
+  getActuals: ({ symbol, interval, from_time, steps }) =>
+    req(`/api/actuals?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&from_time=${encodeURIComponent(from_time || "")}&steps=${steps || 10}`),
   // Переобучение по расписанию (admin)
   getRetrainHistory: () => req("/api/retrain/history"),
   saveRetrainSchedules: (schedules) =>

@@ -110,6 +110,7 @@ def init_db() -> None:
         "ALTER TABLE users ADD COLUMN ai_quota INTEGER NOT NULL DEFAULT 10",
         "ALTER TABLE users ADD COLUMN access_until TEXT DEFAULT NULL",
         "ALTER TABLE signals ADD COLUMN forecast_json TEXT DEFAULT NULL",
+        "ALTER TABLE signals ADD COLUMN explanation_json TEXT DEFAULT NULL",
     ]:
         try:
             con.execute(_col_sql)
@@ -369,14 +370,16 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
 # ---------------------------------------------------------------------------
 # История сигналов
 # ---------------------------------------------------------------------------
-def save_signal(user_id: int, signal: dict, forecast_json: str | None = None) -> int:
+def save_signal(user_id: int, signal: dict, forecast_json: str | None = None,
+                explanation_json: str | None = None) -> int:
     with _con() as con:
         cur = con.execute("""
             INSERT INTO signals
               (user_id, symbol, interval, direction,
                entry, stop_loss, take_profit,
-               prob_up, exp_return, exp_vol, risk_reward, confidence, signal_time, forecast_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               prob_up, exp_return, exp_vol, risk_reward, confidence, signal_time,
+               forecast_json, explanation_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             user_id,
             signal.get("symbol"),
@@ -392,6 +395,7 @@ def save_signal(user_id: int, signal: dict, forecast_json: str | None = None) ->
             signal.get("confidence"),
             signal.get("time"),
             forecast_json,
+            explanation_json,
         ))
         con.commit()
         return cur.lastrowid
@@ -505,6 +509,15 @@ def get_ai_analysis(analysis_id: int, user_id: int) -> dict | None:
     if not row:
         return None
     return json.loads(row["result_json"])
+
+
+def delete_ai_analysis(analysis_id: int, user_id: int) -> bool:
+    with _con() as con:
+        cur = con.execute(
+            "DELETE FROM ai_analyses WHERE id=? AND user_id=?",
+            (analysis_id, user_id),
+        )
+    return cur.rowcount > 0
 
 
 def get_ai_quota_info(user: dict) -> dict:

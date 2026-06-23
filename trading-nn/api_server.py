@@ -301,6 +301,7 @@ class TrainUniversalReq(BaseModel):
     lookback: Optional[int] = None
     warm_start: bool = False
     direction_filter: str = "both"
+    excluded_features: list[str] = []
 
 
 class FeatureImportanceReq(BaseModel):
@@ -409,6 +410,7 @@ def _do_train_universal(jid: str, req: TrainUniversalReq):
             horizon=req.horizon,
             lookback=req.lookback,
             direction_filter=req.direction_filter or "both",
+            excluded_features=req.excluded_features or [],
         )
 
         if JOBS.is_cancelled(jid):
@@ -462,21 +464,75 @@ def _do_backtest(jid: str, req: BacktestReq):
         def progress(frac, msg):
             JOBS.update(jid, progress=round(float(frac), 3))
             JOBS.log(jid, msg)
-            return JOBS.is_cancelled(jid)  # True = попросить walk_forward прерваться
+            return JOBS.is_cancelled(jid)
+
+        def on_fold(fold_idx, total_folds, metrics):
+            entry = {
+                "fold":           fold_idx,
+                "total":          total_folds,
+                "total_return":   round(metrics.get("total_return", 0.0) * 100, 2),
+                "profit_factor":  round(metrics.get("profit_factor", 0.0), 3),
+                "win_rate":       round(metrics.get("win_rate", 0.0) * 100, 1),
+                "n_trades":       metrics.get("n_trades", 0),
+                "max_drawdown":   round(metrics.get("max_drawdown", 0.0) * 100, 2),
+                "recovery_factor": round(metrics.get("recovery_factor", 0.0), 3),
+            }
+            with JOBS.lock:
+                job = JOBS.jobs.get(jid)
+                if job is not None:
+                    if "fold_data" not in job:
+                        job["fold_data"] = []
+                    job["fold_data"].append(entry)
+            ret_s = f"{entry['total_return']:+.1f}%" if entry['total_return'] is not None else "—"
+            JOBS.log(jid, f"[chart] фолд {fold_idx}/{total_folds} доход={ret_s} PF={entry['profit_factor']:.2f} сделок={entry['n_trades']}")
 
         res = wf.walk_forward(cfg, train_bars=train_bars, test_bars=test_bars,
                               epochs=req.epochs, anchored=req.anchored,
                               commission=req.commission, slippage=req.slippage,
-                              on_progress=progress)
+                              on_progress=progress, on_fold=on_fold)
 
         if JOBS.is_cancelled(jid):
             JOBS.update(jid, status="cancelled", progress=JOBS.get(jid)["progress"])
             JOBS.log(jid, "Walk-forward остановлен пользователем")
             return
 
+        ov = res["overall"]
+        pf  = ov.get("profit_factor", 0)
+        rf  = ov.get("recovery_factor", 0)
+        wr  = ov.get("win_rate", 0)
+        n   = ov.get("n_trades", 0)
+
+        # вердикт по порогам
+        THRESHOLDS = {"min_trades": 10, "min_pf": 1.3, "min_rf": 2.0, "min_wr": 0.45}
+        verdict_ok = (n >= THRESHOLDS["min_trades"] and
+                      pf >= THRESHOLDS["min_pf"] and
+                      rf >= THRESHOLDS["min_rf"] and
+                      wr >= THRESHOLDS["min_wr"])
+        verdict_str = "✓ ГОДНА" if verdict_ok else "✗ НЕ ПРОШЛА"
+        res["verdict"] = {
+            "ok": verdict_ok,
+            "label": verdict_str,
+            "thresholds": THRESHOLDS,
+            "pf": round(pf, 3), "rf": round(rf, 3),
+            "wr": round(wr, 4), "n_trades": n,
+        }
+
+        # сохраняем результат в файл рядом с моделью
+        try:
+            actual_tag = tn.resolve_model_tag(req.symbol, req.interval)
+            wf_path = os.path.join("models", f"{actual_tag}_wf_result.json")
+            import json as _json
+            with open(wf_path, "w") as _f:
+                _json.dump(res, _f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
         JOBS.update(jid, status="done", progress=1.0, result=res)
-        JOBS.log(jid, f"Готово: сделок {res['overall']['n_trades']}, "
-                      f"доходность {res['overall']['total_return']*100:.1f}%")
+        JOBS.log(jid, f"Готово: сделок={n} доходность={ov['total_return']*100:.1f}% "
+                      f"PF={pf:.2f} RF={rf:.2f} WR={wr*100:.0f}%")
+        JOBS.log(jid, f"Вердикт: {verdict_str} "
+                      f"(PF≥{THRESHOLDS['min_pf']} RF≥{THRESHOLDS['min_rf']} "
+                      f"WR≥{THRESHOLDS['min_wr']*100:.0f}% сделок≥{THRESHOLDS['min_trades']})")
     except Exception as e:
         JOBS.update(jid, status="error", error=str(e))
         JOBS.log(jid, f"ОШИБКА: {e}")
@@ -650,7 +706,7 @@ def meta():
     """Инструменты Мосбиржи, таймфреймы и пресеты — для автозаполнения форм."""
     return {
         "instruments": tn.MOEX_INSTRUMENTS,
-        "intervals": ["1d", "4h", "1h"],
+        "intervals": ["1d", "4h"],
         "presets": tn.TIMEFRAME_PRESETS,
         "backtest_presets": tn.BACKTEST_PRESETS,
     }
@@ -753,6 +809,32 @@ def get_feature_importance(symbol: str, interval: str = "1d",
     return fi
 
 
+@app.get("/api/features/all", tags=["models"])
+def all_features(interval: str = "1d", _=Depends(auth.require_admin)):
+    """Все доступные признаки, сгруппированные по категориям."""
+    return {"groups": tn.get_all_feature_names(interval)}
+
+
+@app.get("/api/features/{tag}", tags=["models"])
+def get_excluded(tag: str, _=Depends(auth.require_admin)):
+    """Список отключённых признаков для конкретной модели."""
+    return {"excluded": tn.get_model_excluded_features(tag)}
+
+
+class ExcludedFeaturesReq(BaseModel):
+    excluded: list[str] = []
+
+
+@app.post("/api/features/{tag}", tags=["models"])
+def set_excluded(tag: str, req: ExcludedFeaturesReq, _=Depends(auth.require_admin)):
+    """Сохраняет список отключённых признаков в config.json модели."""
+    try:
+        tn.set_model_excluded_features(tag, req.excluded)
+        return {"ok": True, "excluded": req.excluded}
+    except FileNotFoundError:
+        raise HTTPException(404, f"Модель {tag} не найдена")
+
+
 @app.post("/api/predict")
 def predict(req: PredictReq):
     cfg = tn.make_config(req.symbol, req.interval, period=req.period)
@@ -784,11 +866,52 @@ def forecast(
                 "forecast": result.get("forecast", []),
                 "levels":   result.get("levels"),
                 "last_price": result.get("last_price"),
+                "signal":   result.get("signal"),
             })
-            auth.save_signal(current_user["id"], sig, forecast_json=fc_json)
+            explanation = sig.get("explanation")
+            expl_json = _json.dumps(explanation, ensure_ascii=False) if explanation else None
+            auth.save_signal(current_user["id"], sig, forecast_json=fc_json,
+                             explanation_json=expl_json)
         return result
     except FileNotFoundError:
         raise HTTPException(404, "Модель не найдена. Сначала обучите её или активируйте нужную модель в разделе «Нейросети».")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/actuals", tags=["signals"])
+def get_actuals(
+    symbol: str,
+    interval: str = "1d",
+    from_time: str = "",   # ISO datetime — начало (последний исторический бар прогноза)
+    steps: int = 10,
+    current_user: dict = Depends(auth.get_current_user),
+):
+    """
+    Возвращает реальные OHLCV-бары после даты прогноза для сравнения с прогнозным графиком.
+    steps — сколько баров вернуть (обычно = кол-во прогнозных свечей).
+    """
+    try:
+        cfg = tn.make_config(symbol, interval)
+        df  = tn.load_ohlcv(cfg)
+        if from_time:
+            try:
+                dt = pd.Timestamp(from_time)
+                df = df[df.index > dt]
+            except Exception:
+                pass
+        df = df.head(steps + 1)   # берём чуть больше на случай пропусков
+        bars = [
+            {
+                "time":  str(ts),
+                "open":  round(float(row.open),  2),
+                "high":  round(float(row.high),  2),
+                "low":   round(float(row.low),   2),
+                "close": round(float(row.close), 2),
+            }
+            for ts, row in df.iterrows()
+        ]
+        return {"bars": bars}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -849,6 +972,15 @@ def get_analysis(analysis_id: int, current_user: dict = Depends(auth.get_current
     if not result:
         raise HTTPException(404, "Анализ не найден")
     return result
+
+
+@app.delete("/api/analyses/{analysis_id}", tags=["analysis"])
+def delete_analysis(analysis_id: int, current_user: dict = Depends(auth.get_current_user)):
+    """Удаляет AI-анализ текущего пользователя."""
+    deleted = auth.delete_ai_analysis(analysis_id, current_user["id"])
+    if not deleted:
+        raise HTTPException(404, "Анализ не найден")
+    return {"ok": True}
 
 
 @app.post("/api/volatility")
@@ -1125,6 +1257,82 @@ def get_active_models(_=Depends(auth.require_admin)):
 def set_active_models(req: ActiveModelsReq, _=Depends(auth.require_admin)):
     auth.set_active_models(req.tags)
     return {"active": req.tags}
+
+
+class WfActivateReq(BaseModel):
+    symbol: str
+    interval: str = "1d"
+    min_pf: float = 1.3
+    min_rf: float = 2.0
+    min_wr: float = 0.45
+    min_trades: int = 10
+    force: bool = False   # активировать даже если не прошла пороги
+
+
+@app.post("/api/models/activate_by_wf", tags=["models"])
+def activate_by_wf(req: WfActivateReq, _=Depends(auth.require_admin)):
+    """
+    Читает последний WF-результат модели и активирует её если прошла пороги.
+    force=True — активирует без проверки порогов.
+    """
+    try:
+        tag = tn.resolve_model_tag(req.symbol, req.interval)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Модель для {req.symbol} {req.interval} не найдена")
+
+    wf_path = os.path.join("models", f"{tag}_wf_result.json")
+    if not os.path.exists(wf_path):
+        raise HTTPException(404, "WF-результат не найден. Сначала запустите walk-forward тест.")
+
+    import json as _json
+    with open(wf_path) as f:
+        wf = _json.load(f)
+
+    ov = wf.get("overall", {})
+    pf = ov.get("profit_factor", 0)
+    rf = ov.get("recovery_factor", 0)
+    wr = ov.get("win_rate", 0)
+    n  = ov.get("n_trades", 0)
+
+    passed = (n >= req.min_trades and pf >= req.min_pf and
+              rf >= req.min_rf and wr >= req.min_wr)
+
+    if not passed and not req.force:
+        return {
+            "activated": False,
+            "tag": tag,
+            "reason": (f"Не прошла пороги: PF={pf:.2f} (нужно ≥{req.min_pf}), "
+                       f"RF={rf:.2f} (нужно ≥{req.min_rf}), "
+                       f"WR={wr*100:.0f}% (нужно ≥{req.min_wr*100:.0f}%), "
+                       f"сделок={n} (нужно ≥{req.min_trades})"),
+            "metrics": {"pf": pf, "rf": rf, "wr": wr, "n_trades": n},
+        }
+
+    # добавляем тег в active_models
+    current = set(auth.get_active_models())
+    current.add(tag)
+    auth.set_active_models(list(current))
+
+    return {
+        "activated": True,
+        "tag": tag,
+        "forced": req.force and not passed,
+        "metrics": {"pf": pf, "rf": rf, "wr": wr, "n_trades": n},
+        "active": list(current),
+    }
+
+
+@app.post("/api/models/deactivate", tags=["models"])
+def deactivate_model(req: WfActivateReq, _=Depends(auth.require_admin)):
+    """Убирает модель из active_models."""
+    try:
+        tag = tn.resolve_model_tag(req.symbol, req.interval)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Модель для {req.symbol} {req.interval} не найдена")
+    current = set(auth.get_active_models())
+    current.discard(tag)
+    auth.set_active_models(list(current))
+    return {"deactivated": True, "tag": tag, "active": list(current)}
 
 
 if __name__ == "__main__":

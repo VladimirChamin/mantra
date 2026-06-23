@@ -16,7 +16,8 @@ export default function SignalTicket({ signal }) {
   const dirLabel = { long: "LONG", short: "SHORT", flat: "НЕТ ВХОДА" }[dir];
   const conf = Math.round((signal.confidence || 0) * 100);
   const orderType = signal.order_type || "MARKET";
-  const isPending = orderType === "BUYSTOP" || orderType === "SELLSTOP";
+  const isPending = orderType === "BUYSTOP" || orderType === "SELLSTOP" || orderType === "LIMIT_BUY" || orderType === "LIMIT_SELL";
+  const isLimit   = orderType === "LIMIT_BUY" || orderType === "LIMIT_SELL";
 
   return (
     <div className="ticket">
@@ -30,13 +31,15 @@ export default function SignalTicket({ signal }) {
 
       {isPending && dir !== "flat" && (
         <div className="pending-banner">
-          Отложенный ордер — срабатывает при касании уровня входа
+          {isLimit
+            ? "Лимитный ордер — исполняется при откате цены до уровня входа"
+            : "Стоп-ордер — срабатывает при пробое уровня входа"}
         </div>
       )}
 
       <div className="level-row">
         <span className="lab">
-          {isPending && dir !== "flat" ? `Уровень ${orderType}` : "Вход"}
+          {isLimit && dir !== "flat" ? "Лимитная цена" : isPending && dir !== "flat" ? `Уровень ${orderType}` : "Вход"}
         </span>
         <span className="val num">{fmt(signal.entry)}</span>
       </div>
@@ -78,6 +81,17 @@ export default function SignalTicket({ signal }) {
           <div className="confbar"><i style={{ width: `${conf}%` }} /></div>
         </div>
       </div>
+
+      {signal.explanation?.length > 0 && (
+        <div className="ticket-explanation">
+          <div className="explanation-title">Обоснование прогноза</div>
+          <ul className="explanation-list">
+            {signal.explanation.map((reason, i) => (
+              <li key={i}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
