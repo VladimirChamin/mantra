@@ -1144,6 +1144,42 @@ def update_subscription(sub_id: int, req: SubscriptionReq, current_user: dict = 
 
 
 # =============================================================================
+# Заметки
+# =============================================================================
+
+class NoteReq(BaseModel):
+    title: str = ""
+    body: str = ""
+    color: str = "default"
+    pinned: bool = False
+
+
+@app.get("/api/notes", tags=["notes"])
+def get_notes(current_user: dict = Depends(auth.get_current_user)):
+    return auth.get_notes(current_user["id"])
+
+
+@app.post("/api/notes", tags=["notes"])
+def create_note(req: NoteReq, current_user: dict = Depends(auth.get_current_user)):
+    return auth.create_note(current_user["id"], req.title, req.body, req.color)
+
+
+@app.put("/api/notes/{note_id}", tags=["notes"])
+def update_note(note_id: int, req: NoteReq, current_user: dict = Depends(auth.get_current_user)):
+    note = auth.update_note(note_id, current_user["id"], req.title, req.body, req.color, req.pinned)
+    if not note:
+        raise HTTPException(404, "Заметка не найдена")
+    return note
+
+
+@app.delete("/api/notes/{note_id}", tags=["notes"])
+def delete_note(note_id: int, current_user: dict = Depends(auth.get_current_user)):
+    if not auth.delete_note(note_id, current_user["id"]):
+        raise HTTPException(404, "Заметка не найдена")
+    return {"ok": True}
+
+
+# =============================================================================
 # AUC Monitor эндпоинты
 # =============================================================================
 

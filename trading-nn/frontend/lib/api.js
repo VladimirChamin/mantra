@@ -56,6 +56,11 @@ export const api = {
   changePassword: (payload) =>
     req("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
   deleteOwnAccount: () => req("/api/auth/me", { method: "DELETE" }),
+  // Заметки
+  getNotes: () => req("/api/notes"),
+  createNote: (payload) => req("/api/notes", { method: "POST", body: JSON.stringify(payload) }),
+  updateNote: (id, payload) => req(`/api/notes/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteNote: (id) => req(`/api/notes/${id}`, { method: "DELETE" }),
   // Подписки на сигналы
   getSubscriptions: () => req("/api/subscriptions"),
   addSubscription: (payload) =>

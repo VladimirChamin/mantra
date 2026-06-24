@@ -17,6 +17,7 @@ import ModelMetrics from "@/components/ModelMetrics";
 import FeatureEditor from "@/components/FeatureEditor";
 import SymbolInput from "@/components/SymbolInput";
 import WalkForwardChart from "@/components/WalkForwardChart";
+import Notes from "@/components/Notes";
 
 const DEFAULT_INTERVALS = ["1d", "4h"];
 
@@ -557,6 +558,7 @@ export default function Dashboard() {
     ["signal", "Сигнал"],
     ["screener", "Скриннер"],
     ["subscriptions", "Подписки"],
+    ["notes", "Заметки"],
     ...(isAdmin ? [["admin", "Админка"]] : []),
   ];
 
@@ -573,6 +575,7 @@ export default function Dashboard() {
     signal:        "◈",
     screener:      "⊞",
     subscriptions: "◉",
+    notes:         "✎",
     admin:         "⚙",
     classes:       "▣",
     backtest:      "▷",
@@ -1188,6 +1191,8 @@ export default function Dashboard() {
       {tab === "subscriptions" && (
         <Subscriptions />
       )}
+
+      {tab === "notes" && <Notes />}
 
       {tab === "metrics" && isAdmin && (
         <div className="card">

@@ -105,6 +105,18 @@ def init_db() -> None:
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL REFERENCES users(id),
+            title      TEXT    NOT NULL DEFAULT '',
+            body       TEXT    NOT NULL DEFAULT '',
+            color      TEXT    NOT NULL DEFAULT 'default',
+            pinned     INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+    """)
     # миграции для существующих БД
     for _col_sql in [
         "ALTER TABLE users ADD COLUMN ai_quota INTEGER NOT NULL DEFAULT 10",
@@ -564,3 +576,45 @@ def set_active_models(tags: list[str]) -> None:
                 (tag,)
             )
         con.commit()
+
+
+# ---------------------------------------------------------------------------
+# Заметки
+# ---------------------------------------------------------------------------
+
+def get_notes(user_id: int) -> list[dict]:
+    with _con() as con:
+        rows = con.execute(
+            "SELECT * FROM notes WHERE user_id=? ORDER BY pinned DESC, updated_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_note(user_id: int, title: str, body: str, color: str = "default") -> dict:
+    with _con() as con:
+        cur = con.execute(
+            "INSERT INTO notes (user_id, title, body, color) VALUES (?,?,?,?)",
+            (user_id, title.strip(), body.strip(), color),
+        )
+        con.commit()
+        row = con.execute("SELECT * FROM notes WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def update_note(note_id: int, user_id: int, title: str, body: str, color: str, pinned: bool) -> dict | None:
+    with _con() as con:
+        con.execute(
+            "UPDATE notes SET title=?, body=?, color=?, pinned=?, updated_at=datetime('now') WHERE id=? AND user_id=?",
+            (title.strip(), body.strip(), color, 1 if pinned else 0, note_id, user_id),
+        )
+        con.commit()
+        row = con.execute("SELECT * FROM notes WHERE id=? AND user_id=?", (note_id, user_id)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_note(note_id: int, user_id: int) -> bool:
+    with _con() as con:
+        cur = con.execute("DELETE FROM notes WHERE id=? AND user_id=?", (note_id, user_id))
+        con.commit()
+    return cur.rowcount > 0
