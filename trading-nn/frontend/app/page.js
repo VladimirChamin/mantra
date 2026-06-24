@@ -442,6 +442,8 @@ export default function Dashboard() {
     } catch (e) { setErr(e.message); }
   }
 
+  const [actualsLoading, setActualsLoading] = useState(false);
+
   async function viewSignalChart(s) {
     if (!s.forecast_json) return;
     try {
@@ -452,39 +454,43 @@ export default function Dashboard() {
         ? { ...signal, explanation: explanation || signal.explanation }
         : explanation ? { explanation } : null;
 
-      // Определяем дату последнего исторического бара прогноза
       const history = data.history || [];
       const fromTime = history.length > 0 ? history[history.length - 1].time : s.signal_time || s.created_at;
       const steps = (data.forecast || []).length || 10;
 
-      // Сразу показываем без реальных данных, потом дозагружаем
-      const baseEntry = {
+      setHistoryFc({
         ...data,
         signal: signalWithExpl,
         signal_id: s.id,
         symbol: s.symbol,
         interval: s.interval,
+        _fromTime: fromTime,
+        _steps: steps,
         actuals: [],
-      };
-      setHistoryFc(baseEntry);
-
-      // Загружаем реальные бары асинхронно + статус сигнала
-      try {
-        const sig = data.signal || {};
-        const res = await api.getActuals({
-          symbol: s.symbol, interval: s.interval, from_time: fromTime, steps,
-          signal_direction: sig.direction,
-          signal_entry: sig.entry,
-          signal_sl: sig.stop_loss,
-          signal_tp: sig.take_profit,
-        });
-        if (res.bars?.length) {
-          setHistoryFc(prev => prev?.signal_id === s.id
-            ? { ...prev, actuals: res.bars, signal_status: res.signal_status }
-            : prev);
-        }
-      } catch {}
+      });
     } catch {}
+  }
+
+  async function loadActuals() {
+    if (!historyFc) return;
+    setActualsLoading(true);
+    try {
+      const sig = historyFc.signal || {};
+      const res = await api.getActuals({
+        symbol: historyFc.symbol,
+        interval: historyFc.interval,
+        from_time: historyFc._fromTime,
+        steps: historyFc._steps,
+        signal_direction: sig.direction,
+        signal_entry: sig.entry,
+        signal_sl: sig.stop_loss,
+        signal_tp: sig.take_profit,
+      });
+      setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [], signal_status: res.signal_status } : prev);
+    } catch (e) {
+      console.error("loadActuals error", e);
+    }
+    setActualsLoading(false);
   }
 
   const btResult = job && job.kind === "backtest" && job.status === "done" ? job.result : null;
@@ -1250,8 +1256,49 @@ export default function Dashboard() {
             <div className="card" style={{ marginTop: 18 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                 <h2 style={{ margin: 0 }}>Прогноз из истории</h2>
-                <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <button
+                    onClick={loadActuals}
+                    disabled={actualsLoading}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      padding: "6px 14px", borderRadius: 8, fontSize: 13,
+                      border: "1px solid var(--primary)", background: "rgba(59,111,240,.08)",
+                      color: "var(--primary)", cursor: actualsLoading ? "not-allowed" : "pointer",
+                      opacity: actualsLoading ? 0.6 : 1, fontFamily: "var(--body)",
+                    }}
+                  >
+                    {actualsLoading
+                      ? <><span className="spinner" style={{ width: 12, height: 12 }} /> Загрузка…</>
+                      : historyFc.actuals?.length
+                        ? `↻ Обновить котировки (${historyFc.actuals.length} баров)`
+                        : "↓ Подкачать котировки"
+                    }
+                  </button>
+                  <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
+                </div>
               </div>
+              {historyFc.actuals?.length > 0 && (
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+                  Реальные котировки: <strong style={{ fontFamily: "var(--mono)", color: "var(--text)" }}>{historyFc.actuals.length}</strong> баров после прогноза
+                  {historyFc.signal_status && (
+                    <span style={{
+                      marginLeft: 12, padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                      background: historyFc.signal_status.status === "filled" ? "var(--long-dim)"
+                               : historyFc.signal_status.status === "invalidated" ? "var(--short-dim)"
+                               : "var(--ink-2)",
+                      color: historyFc.signal_status.status === "filled" ? "var(--long)"
+                           : historyFc.signal_status.status === "invalidated" ? "var(--short)"
+                           : "var(--muted)",
+                    }}>
+                      {historyFc.signal_status.status === "filled" ? "✓ Цель достигнута"
+                     : historyFc.signal_status.status === "invalidated" ? "✗ Сигнал отменён"
+                     : historyFc.signal_status.status === "expired" ? "⌛ Горизонт истёк"
+                     : "● Активен"}
+                    </span>
+                  )}
+                </div>
+              )}
               <ForecastChart data={historyFc} isAdmin={isAdmin} actuals={historyFc.actuals} />
               <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--line-soft)" }}>
                 <AIAnalysis
