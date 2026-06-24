@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { api } from "@/lib/api";
 import { getUser, logout } from "@/lib/auth";
 import SignalTicket from "@/components/SignalTicket";
@@ -559,23 +559,25 @@ export default function Dashboard() {
     ["screener", "Скриннер"],
     ["subscriptions", "Подписки"],
     ["notes", "Заметки"],
+    ...(isAdmin ? [["neurolab", "NeuroLab"]] : []),
     ...(isAdmin ? [["admin", "Админка"]] : []),
   ];
 
-  // Подменю Админки
-  const adminSubTabs = [
+  // Подменю NeuroLab (только для админа)
+  const neurolabSubTabs = [
     ["classes", "Обучение"],
     ["backtest", "Walk-forward"],
     ["metrics", "Нейросети"],
   ];
 
-  const isAdminSub = adminSubTabs.some(([k]) => k === tab);
+  const isNeurolabSub = neurolabSubTabs.some(([k]) => k === tab);
 
   const NAV_ICONS = {
     signal:        "◈",
     screener:      "⊞",
     subscriptions: "◉",
     notes:         "✎",
+    neurolab:      "⬡",
     admin:         "⚙",
     classes:       "▣",
     backtest:      "▷",
@@ -585,7 +587,7 @@ export default function Dashboard() {
 
   const allNavItems = [
     ...mainTabs,
-    ...(isAdmin && (tab === "admin" || isAdminSub) ? adminSubTabs : []),
+    ...(isAdmin && (tab === "neurolab" || isNeurolabSub) ? neurolabSubTabs : []),
     ["profile", "Профиль"],
   ];
 
@@ -602,33 +604,35 @@ export default function Dashboard() {
 
         <nav className="sidebar-nav">
           {mainTabs.map(([k, label]) => {
-            const isActive = tab === k || (k === "admin" && isAdminSub);
+            const isActive = tab === k || (k === "neurolab" && isNeurolabSub);
             return (
-              <button key={k}
-                className={`nav-item ${isActive ? "active" : ""}`}
-                onClick={() => setTab(k)}
-              >
-                <span className="nav-icon">{NAV_ICONS[k] || "◆"}</span>
-                <span className="nav-label">{label}</span>
-                {isActive && <span className="nav-pip" />}
-              </button>
+              <React.Fragment key={k}>
+                <button
+                  className={`nav-item ${isActive ? "active" : ""}`}
+                  onClick={() => setTab(k === "neurolab" ? "classes" : k)}
+                >
+                  <span className="nav-icon">{NAV_ICONS[k] || "◆"}</span>
+                  <span className="nav-label">{label}</span>
+                  {isActive && <span className="nav-pip" />}
+                </button>
+
+                {/* подменю NeuroLab */}
+                {k === "neurolab" && isAdmin && (tab === "neurolab" || isNeurolabSub) && (
+                  <div className="nav-sub">
+                    {neurolabSubTabs.map(([sk, slabel]) => (
+                      <button key={sk}
+                        className={`nav-sub-item ${tab === sk ? "active" : ""}`}
+                        onClick={() => setTab(sk)}
+                      >
+                        <span className="nav-icon">{NAV_ICONS[sk] || "·"}</span>
+                        <span className="nav-label">{slabel}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </React.Fragment>
             );
           })}
-
-          {/* подменю Админки */}
-          {isAdmin && (tab === "admin" || isAdminSub) && (
-            <div className="nav-sub">
-              {adminSubTabs.map(([k, label]) => (
-                <button key={k}
-                  className={`nav-sub-item ${tab === k ? "active" : ""}`}
-                  onClick={() => setTab(k)}
-                >
-                  <span className="nav-icon">{NAV_ICONS[k] || "·"}</span>
-                  <span className="nav-label">{label}</span>
-                </button>
-              ))}
-            </div>
-          )}
         </nav>
 
         <div className="sidebar-foot">
@@ -677,7 +681,7 @@ export default function Dashboard() {
             {allNavItems.map(([k, label]) => (
               <button key={k}
                 className={`mobile-tab ${tab === k ? "active" : ""}`}
-                onClick={() => { setTab(k); setMenuOpen(false); }}
+                onClick={() => { setTab(k === "neurolab" ? "classes" : k); setMenuOpen(false); }}
               >
                 {label}
               </button>
@@ -1144,14 +1148,17 @@ export default function Dashboard() {
       )}
 
       {tab === "admin" && isAdmin && (
-        <div className="card">
-          <h2>Управление пользователями</h2>
-          <p className="sub">
-            Изменяйте квоты AI-аналитики, сроки доступа, роли и удаляйте аккаунты.
-          </p>
-          <AdminPanel currentUserId={currentUser?.id} />
-        </div>
+        <>
+          <div className="card">
+            <h2>Управление пользователями</h2>
+            <p className="sub">
+              Изменяйте квоты AI-аналитики, сроки доступа, роли и удаляйте аккаунты.
+            </p>
+            <AdminPanel currentUserId={currentUser?.id} />
+          </div>
+        </>
       )}
+
 
       <style>{`
         .hamburger { display: none; flex-direction: column; gap: 5px; background: none; border: none; cursor: pointer; padding: 6px; }

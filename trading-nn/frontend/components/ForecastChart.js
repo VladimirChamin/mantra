@@ -160,7 +160,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     ...(showIndicators ? pivotLines.map(l => l.v) : []),
     ...(showIndicators ? bbUPts.filter(p => p.x >= effStart && p.x < effStart + effCount).map(p => p.v) : []),
     ...(showIndicators ? bbLPts.filter(p => p.x >= effStart && p.x < effStart + effCount).map(p => p.v) : []),
-    ...visA.map(b => b.high), ...visA.map(b => b.low),
+    ...visA.map(b => b.close),
   ];
   if (hasTrade) vals.push(levels.entry, levels.stop_loss, levels.take_profit);
   let lo = vals.length ? Math.min(...vals) : 0;
@@ -573,31 +573,38 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                   })
               }
 
-              {/* Реальные свечи за период прогноза */}
-              {actualBars.map((bar, i) => {
-                const gi = hN + i;
-                if (gi < effStart || gi >= effStart + effCount) return null;
-                const cx       = xBar(gi);
-                const isUp     = bar.close >= bar.open;
-                const col      = isUp ? "var(--long)" : "var(--short)";
-                const bodyTop  = yv(Math.max(bar.open, bar.close));
-                const bodyH    = Math.max(yv(Math.min(bar.open, bar.close)) - bodyTop, 1.5);
+              {/* Реальные котировки — чёрная линия по close */}
+              {actualBars.length > 0 && (() => {
+                // строим точки: начинаем с last history close, затем каждый actual close
+                const lastHistBar = history[hN - 1];
+                const anchorIdx = hN - 1;
+                const pts = [];
+                if (anchorIdx >= effStart && anchorIdx < effStart + effCount && lastHistBar?.close != null) {
+                  pts.push({ gi: anchorIdx, close: lastHistBar.close });
+                }
+                actualBars.forEach((bar, i) => {
+                  const gi = hN + i;
+                  if (gi >= effStart && gi < effStart + effCount && bar.close != null) {
+                    pts.push({ gi, close: bar.close });
+                  }
+                });
+                if (pts.length < 2) return null;
+                const d = pts.map((p, i) =>
+                  `${i === 0 ? "M" : "L"}${xBar(p.gi).toFixed(1)},${yv(p.close).toFixed(1)}`
+                ).join(" ");
                 return (
-                  <g key={`act-${i}`} opacity="0.92">
-                    {/* тень от прогноза — тонкая белая обводка */}
-                    <rect x={cx - candleW / 2 - 1} y={bodyTop - 1}
-                          width={candleW + 2} height={bodyH + 2}
-                          fill="var(--panel)" rx="0.5" opacity="0.55" />
-                    <line x1={cx} y1={yv(bar.high)} x2={cx} y2={bodyTop}
-                          stroke={col} strokeWidth="1.5" />
-                    <line x1={cx} y1={bodyTop + bodyH} x2={cx} y2={yv(bar.low)}
-                          stroke={col} strokeWidth="1.5" />
-                    <rect x={cx - candleW / 2} y={bodyTop}
-                          width={candleW} height={bodyH}
-                          fill={col} stroke="var(--panel)" strokeWidth="0.8" />
+                  <g key="actuals-line">
+                    {/* тонкая белая обводка для контраста на цветных свечах */}
+                    <path d={d} fill="none" stroke="var(--panel)" strokeWidth="3.5" opacity="0.55" />
+                    <path d={d} fill="none" stroke="var(--text)" strokeWidth="1.8" opacity="0.9" />
+                    {/* точки на каждом баре */}
+                    {pts.slice(1).map((p, i) => (
+                      <circle key={i} cx={xBar(p.gi)} cy={yv(p.close)} r="2.2"
+                              fill="var(--text)" opacity="0.85" />
+                    ))}
                   </g>
                 );
-              })}
+              })()}
 
               {/* Уровни сделки */}
               {levelLines.map((l, i) => (

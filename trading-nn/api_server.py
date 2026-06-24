@@ -43,6 +43,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 
+import pandas as pd
 import tensorflow as tf
 
 import trading_nn as tn
@@ -893,7 +894,7 @@ def get_actuals(
                 elif df.index.tz is None and dt.tzinfo is not None:
                     dt = dt.tz_localize(None)
                 df = df[df.index > dt]
-            except Exception:
+            except Exception as e:
                 return {"bars": [], "signal_status": None}
         else:
             return {"bars": [], "signal_status": None}
