@@ -1344,6 +1344,9 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
   const [delLoading, setDelLoading] = useState(false);
   const [delErr, setDelErr] = useState("");
 
+  const [payLoading, setPayLoading] = useState(false);
+  const [payErr, setPayErr] = useState("");
+
   async function changePassword(e) {
     e.preventDefault();
     setPwMsg(""); setPwErr("");
@@ -1368,6 +1371,17 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
       setDelErr(e.message);
       setDelLoading(false);
     }
+  }
+
+  async function handlePayment() {
+    setPayLoading(true); setPayErr("");
+    try {
+      const { url } = await api.paymentInit();
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setPayErr(e.message);
+    }
+    setPayLoading(false);
   }
 
   if (!user) return null;
@@ -1414,6 +1428,25 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
                   </div>
                 </>
             }
+          </div>
+        )}
+
+        {!isAdmin && (
+          <div className="card" style={{ border: "1px solid var(--primary)" }}>
+            <h2 style={{ marginBottom: 6 }}>Доступ к терминалу</h2>
+            <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 6px" }}>
+              {user.access_until
+                ? <>Активен до: <strong style={{ color: "var(--long)" }}>{new Date(user.access_until).toLocaleDateString("ru-RU")}</strong></>
+                : <span style={{ color: "var(--muted)" }}>Доступ не ограничен</span>}
+            </p>
+            <p style={{ fontSize: 12, color: "var(--muted-2)", margin: "0 0 14px" }}>
+              Квартал (92 дня) — <strong style={{ color: "var(--text)" }}>15 000 ₽</strong>
+            </p>
+            {payErr && <div className="error" style={{ marginBottom: 10 }}>{payErr}</div>}
+            <button onClick={handlePayment} disabled={payLoading} className="btn"
+              style={{ background: "var(--primary)", color: "#fff" }}>
+              {payLoading ? "Создание счёта…" : "Оплатить через Robokassa"}
+            </button>
           </div>
         )}
 

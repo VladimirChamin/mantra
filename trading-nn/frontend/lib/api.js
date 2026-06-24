@@ -56,6 +56,9 @@ export const api = {
   changePassword: (payload) =>
     req("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
   deleteOwnAccount: () => req("/api/auth/me", { method: "DELETE" }),
+  // Оплата
+  paymentInit: () => req("/api/payment/init", { method: "POST" }),
+  paymentStatus: (invId) => req(`/api/payment/status/${invId}`),
   // Заметки
   getNotes: () => req("/api/notes"),
   createNote: (payload) => req("/api/notes", { method: "POST", body: JSON.stringify(payload) }),

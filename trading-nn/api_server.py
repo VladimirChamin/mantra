@@ -39,8 +39,9 @@ if _env_path.exists():
             _v = _v.strip().strip('"').strip("'")
             os.environ.setdefault(_k.strip(), _v)
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, EmailStr
 
 import pandas as pd
@@ -605,6 +606,71 @@ def delete_own_account(user: dict = Depends(auth.get_current_user)):
     """Удаление собственного аккаунта со всеми данными."""
     auth.delete_user(user["id"])
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Robokassa — оплата доступа
+# ---------------------------------------------------------------------------
+import hashlib
+import time as _time
+
+_RK_LOGIN    = os.environ.get("ROBOKASSA_LOGIN", "")
+_RK_PASS1    = os.environ.get("ROBOKASSA_PASSWORD1", "")
+_RK_PASS2    = os.environ.get("ROBOKASSA_PASSWORD2", "")
+_RK_TEST     = os.environ.get("ROBOKASSA_TEST", "0") == "1"
+_RK_AMOUNT   = 15000.00
+_RK_DESC     = "Mantra Trading — доступ на квартал (92 дня)"
+
+def _rk_sig1(amount: float, inv_id: int) -> str:
+    raw = f"{_RK_LOGIN}:{amount:.2f}:{inv_id}:{_RK_PASS1}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+def _rk_sig2(amount: float, inv_id: int) -> str:
+    raw = f"{amount:.2f}:{inv_id}:{_RK_PASS2}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+@app.post("/api/payment/init", tags=["payment"])
+def payment_init(current_user: dict = Depends(auth.get_current_user)):
+    """Создаёт счёт и возвращает URL для оплаты через Robokassa."""
+    inv_id = int(_time.time()) % 2147483647  # уникальный номер счёта
+    sig = _rk_sig1(_RK_AMOUNT, inv_id)
+    auth.create_payment(current_user["id"], inv_id, _RK_AMOUNT, _RK_DESC)
+    base = "https://auth.robokassa.ru/Merchant/Index.aspx"
+    params = (
+        f"MrchLogin={_RK_LOGIN}"
+        f"&OutSum={_RK_AMOUNT:.2f}"
+        f"&InvId={inv_id}"
+        f"&Description={_RK_DESC}"
+        f"&SignatureValue={sig}"
+        + ("&IsTest=1" if _RK_TEST else "")
+    )
+    return {"url": f"{base}?{params}", "inv_id": inv_id, "amount": _RK_AMOUNT}
+
+
+@app.post("/api/payment/result", tags=["payment"])
+async def payment_result(request: Request):
+    """Robokassa Result URL — вызывается сервером Robokassa после оплаты."""
+    body = await request.form()
+    out_sum = body.get("OutSum", "")
+    inv_id  = int(body.get("InvId", 0))
+    sig     = body.get("SignatureValue", "").lower()
+
+    expected = _rk_sig2(float(out_sum), inv_id)
+    if sig != expected:
+        return PlainTextResponse("bad sign", status_code=400)
+
+    auth.confirm_payment(inv_id)
+    return PlainTextResponse(f"OK{inv_id}")
+
+
+@app.get("/api/payment/status/{inv_id}", tags=["payment"])
+def payment_status(inv_id: int, current_user: dict = Depends(auth.get_current_user)):
+    """Проверка статуса платежа."""
+    p = auth.get_payment_by_inv(inv_id)
+    if not p or p["user_id"] != current_user["id"]:
+        raise HTTPException(404, "Платёж не найден")
+    return p
+
 
 def _safe_user(u: dict) -> dict:
     return {k: u[k] for k in ("id", "email", "name", "role", "created_at") if k in u}

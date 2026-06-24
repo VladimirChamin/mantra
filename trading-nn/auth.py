@@ -1,39 +1,33 @@
 """
 auth.py — аутентификация и авторизация.
-SQLite (aiosqlite) + bcrypt + JWT.
-
-Таблицы:
-    users      — пользователи (id, email, password_hash, role, created_at)
-    signals    — история прогнозов (id, user_id, symbol, interval, direction,
-                 entry, stop_loss, take_profit, prob_up, exp_return, exp_vol,
-                 risk_reward, confidence, signal_time, created_at)
+MySQL (PyMySQL) + bcrypt + JWT.
 """
 
 from __future__ import annotations
 
 import os
 import json
-import sqlite3
-import asyncio
 import secrets
 import string
 import smtplib
+import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import Optional
 
 import bcrypt
 import jwt
+import pymysql
+import pymysql.cursors
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+
 # ---------------------------------------------------------------------------
-DB_PATH   = Path(__file__).parent / "data" / "app.db"
 JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-in-production-please")
 JWT_ALG    = "HS256"
-JWT_TTL_H  = 24 * 7   # токен живёт 7 дней
+JWT_TTL_H  = 24 * 7
 
 ROLES = ("admin", "user")
 
@@ -41,183 +35,240 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 # ---------------------------------------------------------------------------
-# Синхронная инициализация БД (вызывается при старте)
+# Соединение с MySQL
+# ---------------------------------------------------------------------------
+def _con() -> pymysql.connections.Connection:
+    host = os.environ.get("DB_HOST", "localhost")
+    kw = dict(
+        host        = host,
+        user        = os.environ.get("DB_USER", "root"),
+        password    = os.environ.get("DB_PASSWORD", ""),
+        database    = os.environ.get("DB_NAME", "mantra"),
+        charset     = "utf8mb4",
+        cursorclass = pymysql.cursors.DictCursor,
+        autocommit  = False,
+        connect_timeout = 10,
+    )
+    # Пробуем без SSL, затем с SSL (reg.ru и некоторые хостинги требуют SSL)
+    try:
+        return pymysql.connect(**kw)
+    except Exception:
+        import ssl as _ssl
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        return pymysql.connect(**kw, ssl=ctx)
+
+
+# ---------------------------------------------------------------------------
+# Инициализация БД
 # ---------------------------------------------------------------------------
 def init_db() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
-    con.execute("PRAGMA journal_mode=WAL")
-    con.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            name          TEXT    NOT NULL DEFAULT '',
-            password_hash TEXT    NOT NULL,
-            role          TEXT    NOT NULL DEFAULT 'user'
-                            CHECK(role IN ('admin','user')),
-            ai_quota      INTEGER NOT NULL DEFAULT 10,
-            access_until  TEXT    DEFAULT NULL,
-            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS ai_usage (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id      INTEGER NOT NULL REFERENCES users(id),
-            symbol       TEXT,
-            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS ai_analyses (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id          INTEGER NOT NULL REFERENCES users(id),
-            symbol           TEXT    NOT NULL,
-            signal_direction TEXT,
-            signal_entry     REAL,
-            verdict          TEXT,
-            verdict_conf     INTEGER,
-            recommendation   TEXT,
-            result_json      TEXT,
-            created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS signals (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id      INTEGER NOT NULL REFERENCES users(id),
-            symbol       TEXT    NOT NULL,
-            interval     TEXT    NOT NULL,
-            direction    TEXT    NOT NULL,
-            entry        REAL,
-            stop_loss    REAL,
-            take_profit  REAL,
-            prob_up      REAL,
-            exp_return   REAL,
-            exp_vol      REAL,
-            risk_reward  REAL,
-            confidence   REAL,
-            signal_time  TEXT,
-            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS active_models (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            tag        TEXT NOT NULL UNIQUE,
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-    """)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS notes (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id    INTEGER NOT NULL REFERENCES users(id),
-            title      TEXT    NOT NULL DEFAULT '',
-            body       TEXT    NOT NULL DEFAULT '',
-            color      TEXT    NOT NULL DEFAULT 'default',
-            pinned     INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
-    """)
-    # миграции для существующих БД
-    for _col_sql in [
-        "ALTER TABLE users ADD COLUMN ai_quota INTEGER NOT NULL DEFAULT 10",
-        "ALTER TABLE users ADD COLUMN access_until TEXT DEFAULT NULL",
-        "ALTER TABLE signals ADD COLUMN forecast_json TEXT DEFAULT NULL",
-        "ALTER TABLE signals ADD COLUMN explanation_json TEXT DEFAULT NULL",
-        "ALTER TABLE ai_analyses ADD COLUMN signal_id INTEGER DEFAULT NULL",
-    ]:
-        try:
-            con.execute(_col_sql)
-            con.commit()
-        except Exception:
-            pass
-
-    con.commit()
-
-    # создаём admin если ещё нет
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@trading.local")
-    admin_pass  = os.environ.get("ADMIN_PASSWORD", "admin123")
-    row = con.execute("SELECT id FROM users WHERE email=?", (admin_email,)).fetchone()
-    if not row:
-        ph = bcrypt.hashpw(admin_pass.encode(), bcrypt.gensalt()).decode()
-        con.execute(
-            "INSERT INTO users (email, name, password_hash, role) VALUES (?,?,?,?)",
-            (admin_email, "Admin", ph, "admin"),
-        )
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id            INT AUTO_INCREMENT PRIMARY KEY,
+                    email         VARCHAR(255) NOT NULL UNIQUE,
+                    name          VARCHAR(255) NOT NULL DEFAULT '',
+                    password_hash VARCHAR(255) NOT NULL,
+                    role          ENUM('admin','user') NOT NULL DEFAULT 'user',
+                    ai_quota      INT NOT NULL DEFAULT 10,
+                    access_until  DATETIME DEFAULT NULL,
+                    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS ai_usage (
+                    id         INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id    INT NOT NULL,
+                    symbol     VARCHAR(50),
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user_month (user_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS ai_analyses (
+                    id               INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id          INT NOT NULL,
+                    symbol           VARCHAR(50) NOT NULL,
+                    signal_direction VARCHAR(10),
+                    signal_entry     DOUBLE,
+                    signal_id        INT DEFAULT NULL,
+                    verdict          VARCHAR(20),
+                    verdict_conf     INT,
+                    recommendation   TEXT,
+                    result_json      LONGTEXT,
+                    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS signals (
+                    id               INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id          INT NOT NULL,
+                    symbol           VARCHAR(50) NOT NULL,
+                    `interval`       VARCHAR(10) NOT NULL,
+                    direction        VARCHAR(10) NOT NULL,
+                    entry            DOUBLE,
+                    stop_loss        DOUBLE,
+                    take_profit      DOUBLE,
+                    prob_up          DOUBLE,
+                    exp_return       DOUBLE,
+                    exp_vol          DOUBLE,
+                    risk_reward      DOUBLE,
+                    confidence       DOUBLE,
+                    signal_time      DATETIME,
+                    forecast_json    LONGTEXT,
+                    explanation_json LONGTEXT,
+                    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS active_models (
+                    id         INT AUTO_INCREMENT PRIMARY KEY,
+                    tag        VARCHAR(255) NOT NULL UNIQUE,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS notes (
+                    id         INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id    INT NOT NULL,
+                    title      TEXT NOT NULL,
+                    body       LONGTEXT NOT NULL,
+                    color      VARCHAR(20) NOT NULL DEFAULT 'default',
+                    pinned     TINYINT(1) NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id           INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id      INT NOT NULL,
+                    inv_id       INT NOT NULL UNIQUE,
+                    amount       DECIMAL(10,2) NOT NULL,
+                    description  VARCHAR(255),
+                    status       ENUM('pending','paid','failed') NOT NULL DEFAULT 'pending',
+                    created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    paid_at      DATETIME DEFAULT NULL,
+                    INDEX idx_user (user_id),
+                    INDEX idx_inv (inv_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
         con.commit()
-        print(f"[auth] Создан admin: {admin_email} / {admin_pass}")
 
-    con.close()
+        # создаём admin если нет
+        admin_email = os.environ.get("ADMIN_EMAIL", "admin@trading.local")
+        admin_pass  = os.environ.get("ADMIN_PASSWORD", "admin123")
+        with con.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (admin_email,))
+            if not cur.fetchone():
+                ph = bcrypt.hashpw(admin_pass.encode(), bcrypt.gensalt()).decode()
+                cur.execute(
+                    "INSERT INTO users (email, name, password_hash, role) VALUES (%s,%s,%s,%s)",
+                    (admin_email, "Admin", ph, "admin"),
+                )
+                con.commit()
+                print(f"[auth] Создан admin: {admin_email} / {admin_pass}")
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
 # Пользователи
 # ---------------------------------------------------------------------------
-def _con() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    return con
-
-
 def get_user_by_email(email: str) -> Optional[dict]:
-    with _con() as con:
-        row = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
-        return dict(row) if row else None
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE email=%s", (email,))
+            return cur.fetchone()
+    finally:
+        con.close()
 
 
 def get_user_by_id(uid: int) -> Optional[dict]:
-    with _con() as con:
-        row = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-        return dict(row) if row else None
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE id=%s", (uid,))
+            return cur.fetchone()
+    finally:
+        con.close()
 
 
 def create_user(email: str, name: str, password: str, role: str = "user") -> dict:
     if role not in ROLES:
         raise ValueError(f"Недопустимая роль: {role}")
     ph = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    with _con() as con:
-        try:
-            cur = con.execute(
-                "INSERT INTO users (email, name, password_hash, role) VALUES (?,?,?,?)",
-                (email, name, ph, role),
-            )
-            con.commit()
-            return get_user_by_id(cur.lastrowid)
-        except sqlite3.IntegrityError:
-            raise ValueError(f"Email '{email}' уже зарегистрирован")
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO users (email, name, password_hash, role) VALUES (%s,%s,%s,%s)",
+                    (email, name, ph, role),
+                )
+                con.commit()
+                uid = cur.lastrowid
+            except pymysql.err.IntegrityError:
+                raise ValueError(f"Email '{email}' уже зарегистрирован")
+        return get_user_by_id(uid)
+    finally:
+        con.close()
 
 
 def list_users() -> list[dict]:
-    with _con() as con:
-        rows = con.execute(
-            "SELECT id, email, name, role, ai_quota, access_until, created_at FROM users ORDER BY id"
-        ).fetchall()
-        users = [dict(r) for r in rows]
-        # добавляем использование AI за текущий месяц
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT id, email, name, role, ai_quota, access_until, created_at FROM users ORDER BY id"
+            )
+            users = cur.fetchall()
         for u in users:
-            row = con.execute("""
-                SELECT COUNT(*) FROM ai_usage
-                WHERE user_id = ?
-                  AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-            """, (u["id"],)).fetchone()
-            u["ai_used_this_month"] = row[0] if row else 0
+            with con.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) as cnt FROM ai_usage
+                    WHERE user_id=%s AND DATE_FORMAT(created_at,'%%Y-%%m') = DATE_FORMAT(NOW(),'%%Y-%%m')
+                """, (u["id"],))
+                row = cur.fetchone()
+                u["ai_used_this_month"] = row["cnt"] if row else 0
             u["access_active"] = _is_access_active(u)
-        return users
+            # сериализуем datetime
+            for k in ("access_until", "created_at"):
+                if isinstance(u.get(k), datetime):
+                    u[k] = u[k].isoformat()
+        return list(users)
+    finally:
+        con.close()
 
 
 def _is_access_active(user: dict) -> bool:
     until = user.get("access_until")
     if not until:
-        return True  # без ограничения — всегда активен
+        return True
     try:
-        return datetime.fromisoformat(until) >= datetime.now(timezone.utc)
+        if isinstance(until, datetime):
+            return until.replace(tzinfo=timezone.utc) >= datetime.now(timezone.utc)
+        return datetime.fromisoformat(str(until)) >= datetime.now(timezone.utc)
     except Exception:
         return True
 
 
 def update_user_quota(user_id: int, ai_quota: int) -> dict:
-    with _con() as con:
-        con.execute("UPDATE users SET ai_quota=? WHERE id=?", (ai_quota, user_id))
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("UPDATE users SET ai_quota=%s WHERE id=%s", (ai_quota, user_id))
         con.commit()
+    finally:
+        con.close()
     user = get_user_by_id(user_id)
     if not user:
         raise ValueError("Пользователь не найден")
@@ -225,10 +276,13 @@ def update_user_quota(user_id: int, ai_quota: int) -> dict:
 
 
 def update_user_access(user_id: int, access_until: Optional[str]) -> dict:
-    """access_until — ISO datetime строка или None (бессрочно)."""
-    with _con() as con:
-        con.execute("UPDATE users SET access_until=? WHERE id=?", (access_until, user_id))
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("UPDATE users SET access_until=%s WHERE id=%s", (access_until, user_id))
         con.commit()
+    finally:
+        con.close()
     user = get_user_by_id(user_id)
     if not user:
         raise ValueError("Пользователь не найден")
@@ -238,36 +292,57 @@ def update_user_access(user_id: int, access_until: Optional[str]) -> dict:
 def update_user_role(user_id: int, role: str) -> dict:
     if role not in ROLES:
         raise ValueError(f"Недопустимая роль: {role}")
-    with _con() as con:
-        con.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("UPDATE users SET role=%s WHERE id=%s", (role, user_id))
         con.commit()
+    finally:
+        con.close()
     user = get_user_by_id(user_id)
     if not user:
         raise ValueError("Пользователь не найден")
     return user
 
 
+def delete_user(user_id: int) -> None:
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("DELETE FROM ai_usage WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM signals WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM notes WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM ai_analyses WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
+        con.commit()
+    finally:
+        con.close()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
 # ---------------------------------------------------------------------------
-# Сброс пароля
+# Сброс пароля / SMTP
 # ---------------------------------------------------------------------------
 _PWD_CHARS = string.ascii_letters + string.digits
+
 
 def _gen_password(length: int = 12) -> str:
     return "".join(secrets.choice(_PWD_CHARS) for _ in range(length))
 
 
 def _send_email(to: str, subject: str, body_html: str) -> None:
-    """Отправляет письмо через SMTP из .env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM)."""
-    host  = os.environ.get("SMTP_HOST", "")
-    port  = int(os.environ.get("SMTP_PORT", "587"))
-    user  = os.environ.get("SMTP_USER", "")
-    pw    = os.environ.get("SMTP_PASS", "")
-    from_ = os.environ.get("SMTP_FROM", user)
+    host    = os.environ.get("SMTP_HOST", "")
+    port    = int(os.environ.get("SMTP_PORT", "587"))
+    secure  = os.environ.get("SMTP_SECURE", "").lower() in ("true", "1", "yes")
+    user    = os.environ.get("SMTP_USER", "")
+    pw      = os.environ.get("SMTP_PASS", "")
+    from_   = os.environ.get("SMTP_FROM", user)
 
     if not host or not user:
-        raise RuntimeError(
-            "SMTP не настроен. Добавьте SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS в .env"
-        )
+        raise RuntimeError("SMTP не настроен. Добавьте SMTP_* в .env")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -275,25 +350,35 @@ def _send_email(to: str, subject: str, body_html: str) -> None:
     msg["To"]      = to
     msg.attach(MIMEText(body_html, "html", "utf-8"))
 
-    with smtplib.SMTP(host, port, timeout=10) as s:
-        s.ehlo()
-        s.starttls()
-        s.login(user, pw)
-        s.sendmail(from_, [to], msg.as_string())
+    ctx = ssl.create_default_context()
+    if secure or port == 465:
+        # SSL с первого байта (порт 465)
+        with smtplib.SMTP_SSL(host, port, timeout=15, context=ctx) as s:
+            s.login(user, pw)
+            s.sendmail(from_, [to], msg.as_string())
+    else:
+        # STARTTLS (порт 587 / 25)
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            s.login(user, pw)
+            s.sendmail(from_, [to], msg.as_string())
 
 
 def reset_password(email: str) -> str:
-    """Генерирует новый пароль, обновляет БД, отправляет письмо. Возвращает маскированный email."""
     user = get_user_by_email(email)
     if not user:
-        # не раскрываем существование email
         return _mask_email(email)
 
     new_pw = _gen_password()
     ph = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
-    with _con() as con:
-        con.execute("UPDATE users SET password_hash=? WHERE id=?", (ph, user["id"]))
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("UPDATE users SET password_hash=%s WHERE id=%s", (ph, user["id"]))
         con.commit()
+    finally:
+        con.close()
 
     body = f"""
     <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px;
@@ -324,28 +409,15 @@ def _mask_email(email: str) -> str:
     return name[:2] + "***@" + domain
 
 
-def delete_user(user_id: int) -> None:
-    with _con() as con:
-        # удаляем связанные записи
-        con.execute("DELETE FROM ai_usage WHERE user_id=?", (user_id,))
-        con.execute("DELETE FROM signals WHERE user_id=?", (user_id,))
-        con.execute("DELETE FROM users WHERE id=?", (user_id,))
-        con.commit()
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
-
-
 # ---------------------------------------------------------------------------
 # JWT
 # ---------------------------------------------------------------------------
 def create_token(user: dict) -> str:
     payload = {
-        "sub": str(user["id"]),
+        "sub":   str(user["id"]),
         "email": user["email"],
-        "role": user["role"],
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_TTL_H),
+        "role":  user["role"],
+        "exp":   datetime.now(timezone.utc) + timedelta(hours=JWT_TTL_H),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
@@ -385,82 +457,106 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
 # ---------------------------------------------------------------------------
 def save_signal(user_id: int, signal: dict, forecast_json: str | None = None,
                 explanation_json: str | None = None) -> int:
-    with _con() as con:
-        cur = con.execute("""
-            INSERT INTO signals
-              (user_id, symbol, interval, direction,
-               entry, stop_loss, take_profit,
-               prob_up, exp_return, exp_vol, risk_reward, confidence, signal_time,
-               forecast_json, explanation_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            user_id,
-            signal.get("symbol"),
-            signal.get("interval"),
-            signal.get("direction"),
-            signal.get("entry"),
-            signal.get("stop_loss"),
-            signal.get("take_profit"),
-            signal.get("prob_up"),
-            signal.get("exp_return"),
-            signal.get("exp_vol"),
-            signal.get("risk_reward"),
-            signal.get("confidence"),
-            signal.get("time"),
-            forecast_json,
-            explanation_json,
-        ))
-        con.commit()
-        return cur.lastrowid
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                INSERT INTO signals
+                  (user_id, symbol, `interval`, direction,
+                   entry, stop_loss, take_profit,
+                   prob_up, exp_return, exp_vol, risk_reward, confidence, signal_time,
+                   forecast_json, explanation_json)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                user_id,
+                signal.get("symbol"),
+                signal.get("interval"),
+                signal.get("direction"),
+                signal.get("entry"),
+                signal.get("stop_loss"),
+                signal.get("take_profit"),
+                signal.get("prob_up"),
+                signal.get("exp_return"),
+                signal.get("exp_vol"),
+                signal.get("risk_reward"),
+                signal.get("confidence"),
+                signal.get("time"),
+                forecast_json,
+                explanation_json,
+            ))
+            con.commit()
+            return cur.lastrowid
+    finally:
+        con.close()
 
 
 def get_signals(user_id: int, limit: int = 50) -> list[dict]:
-    with _con() as con:
-        rows = con.execute("""
-            SELECT s.*, u.email, u.name
-            FROM signals s JOIN users u ON s.user_id = u.id
-            WHERE s.user_id = ?
-            ORDER BY s.id DESC LIMIT ?
-        """, (user_id, limit)).fetchall()
-        return [dict(r) for r in rows]
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT s.*, u.email, u.name
+                FROM signals s JOIN users u ON s.user_id = u.id
+                WHERE s.user_id = %s
+                ORDER BY s.id DESC LIMIT %s
+            """, (user_id, limit))
+            rows = cur.fetchall()
+        return _serialize_rows(rows)
+    finally:
+        con.close()
 
 
 def get_all_signals(limit: int = 200) -> list[dict]:
-    with _con() as con:
-        rows = con.execute("""
-            SELECT s.*, u.email, u.name
-            FROM signals s JOIN users u ON s.user_id = u.id
-            ORDER BY s.id DESC LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(r) for r in rows]
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT s.*, u.email, u.name
+                FROM signals s JOIN users u ON s.user_id = u.id
+                ORDER BY s.id DESC LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+        return _serialize_rows(rows)
+    finally:
+        con.close()
 
 
 def delete_signal(signal_id: int, user_id: int) -> bool:
-    with _con() as con:
-        cur = con.execute(
-            "DELETE FROM signals WHERE id = ? AND user_id = ?",
-            (signal_id, user_id)
-        )
-        return cur.rowcount > 0
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "DELETE FROM signals WHERE id=%s AND user_id=%s",
+                (signal_id, user_id)
+            )
+            con.commit()
+            return cur.rowcount > 0
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
 # AI quota
 # ---------------------------------------------------------------------------
-AI_MONTHLY_LIMIT = 10  # для роли user; admin — без лимита
+AI_MONTHLY_LIMIT = 10
+
 
 def get_ai_usage_this_month(user_id: int) -> int:
-    with _con() as con:
-        row = con.execute("""
-            SELECT COUNT(*) FROM ai_usage
-            WHERE user_id = ?
-              AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-        """, (user_id,)).fetchone()
-        return row[0] if row else 0
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as cnt FROM ai_usage
+                WHERE user_id=%s
+                  AND DATE_FORMAT(created_at,'%%Y-%%m') = DATE_FORMAT(NOW(),'%%Y-%%m')
+            """, (user_id,))
+            row = cur.fetchone()
+            return row["cnt"] if row else 0
+    finally:
+        con.close()
 
 
 def check_ai_quota(user: dict) -> tuple[bool, int, int]:
-    """Возвращает (ok, used, limit). admin всегда ok."""
     if user["role"] == "admin":
         used = get_ai_usage_this_month(user["id"])
         return True, used, 999999
@@ -470,23 +566,29 @@ def check_ai_quota(user: dict) -> tuple[bool, int, int]:
 
 
 def consume_ai_quota(user_id: int, symbol: str = None):
-    with _con() as con:
-        con.execute(
-            "INSERT INTO ai_usage (user_id, symbol) VALUES (?,?)",
-            (user_id, symbol)
-        )
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_usage (user_id, symbol) VALUES (%s,%s)",
+                (user_id, symbol)
+            )
         con.commit()
+    finally:
+        con.close()
 
 
 def save_ai_analysis(user_id: int, result: dict, signal_id: int | None = None) -> int:
     verdict_block = result.get("verdict", {})
-    with _con() as con:
-        cur = con.execute(
-            """INSERT INTO ai_analyses
-               (user_id, symbol, signal_direction, signal_entry,
-                verdict, verdict_conf, recommendation, result_json, signal_id)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ai_analyses
+                   (user_id, symbol, signal_direction, signal_entry,
+                    verdict, verdict_conf, recommendation, result_json, signal_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
                 user_id,
                 result.get("symbol"),
                 result.get("signal_direction"),
@@ -496,125 +598,245 @@ def save_ai_analysis(user_id: int, result: dict, signal_id: int | None = None) -
                 verdict_block.get("recommendation"),
                 json.dumps(result, ensure_ascii=False),
                 signal_id,
-            ),
-        )
-        con.commit()
-        return cur.lastrowid
+            ))
+            con.commit()
+            return cur.lastrowid
+    finally:
+        con.close()
 
 
 def get_ai_analyses(user_id: int, limit: int = 20) -> list[dict]:
-    with _con() as con:
-        rows = con.execute(
-            """SELECT id, symbol, signal_direction, signal_entry,
-                      verdict, verdict_conf, recommendation, created_at
-               FROM ai_analyses WHERE user_id=?
-               ORDER BY created_at DESC LIMIT ?""",
-            (user_id, limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT id, symbol, signal_direction, signal_entry,
+                       verdict, verdict_conf, recommendation, created_at
+                FROM ai_analyses WHERE user_id=%s
+                ORDER BY created_at DESC LIMIT %s
+            """, (user_id, limit))
+            rows = cur.fetchall()
+        return _serialize_rows(rows)
+    finally:
+        con.close()
 
 
 def get_ai_analysis(analysis_id: int, user_id: int) -> dict | None:
-    with _con() as con:
-        row = con.execute(
-            "SELECT result_json FROM ai_analyses WHERE id=? AND user_id=?",
-            (analysis_id, user_id),
-        ).fetchone()
-    if not row:
-        return None
-    return json.loads(row["result_json"])
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT result_json FROM ai_analyses WHERE id=%s AND user_id=%s",
+                (analysis_id, user_id),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return json.loads(row["result_json"])
+    finally:
+        con.close()
 
 
 def get_ai_analysis_by_signal(signal_id: int, user_id: int) -> dict | None:
-    with _con() as con:
-        row = con.execute(
-            "SELECT result_json FROM ai_analyses WHERE signal_id=? AND user_id=? ORDER BY id DESC LIMIT 1",
-            (signal_id, user_id),
-        ).fetchone()
-    if not row:
-        return None
-    return json.loads(row["result_json"])
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT result_json FROM ai_analyses WHERE signal_id=%s AND user_id=%s ORDER BY id DESC LIMIT 1",
+                (signal_id, user_id),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return json.loads(row["result_json"])
+    finally:
+        con.close()
 
 
 def delete_ai_analysis(analysis_id: int, user_id: int) -> bool:
-    with _con() as con:
-        cur = con.execute(
-            "DELETE FROM ai_analyses WHERE id=? AND user_id=?",
-            (analysis_id, user_id),
-        )
-    return cur.rowcount > 0
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ai_analyses WHERE id=%s AND user_id=%s",
+                (analysis_id, user_id),
+            )
+            con.commit()
+            return cur.rowcount > 0
+    finally:
+        con.close()
 
 
 def get_ai_quota_info(user: dict) -> dict:
     ok, used, limit = check_ai_quota(user)
     return {
-        "used": used,
-        "limit": limit if limit < 999999 else None,
+        "used":      used,
+        "limit":     limit if limit < 999999 else None,
         "remaining": max(0, limit - used) if limit < 999999 else None,
-        "ok": ok,
+        "ok":        ok,
     }
 
 
 # ---------------------------------------------------------------------------
-# Активные модели (выбор пользователем для прогнозов)
+# Активные модели
 # ---------------------------------------------------------------------------
-
 def get_active_models() -> list[str]:
-    """Возвращает список тегов активных моделей (пустой = все активны)."""
-    with _con() as con:
-        rows = con.execute("SELECT tag FROM active_models ORDER BY tag").fetchall()
-    return [r["tag"] for r in rows]
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT tag FROM active_models ORDER BY tag")
+            rows = cur.fetchall()
+        return [r["tag"] for r in rows]
+    finally:
+        con.close()
 
 
 def set_active_models(tags: list[str]) -> None:
-    """Устанавливает набор активных моделей. Пустой список = все модели активны."""
-    with _con() as con:
-        con.execute("DELETE FROM active_models")
-        for tag in tags:
-            con.execute(
-                "INSERT OR REPLACE INTO active_models (tag, updated_at) VALUES (?, datetime('now'))",
-                (tag,)
-            )
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("DELETE FROM active_models")
+            for tag in tags:
+                cur.execute(
+                    "INSERT INTO active_models (tag) VALUES (%s) ON DUPLICATE KEY UPDATE updated_at=NOW()",
+                    (tag,)
+                )
         con.commit()
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
 # Заметки
 # ---------------------------------------------------------------------------
-
 def get_notes(user_id: int) -> list[dict]:
-    with _con() as con:
-        rows = con.execute(
-            "SELECT * FROM notes WHERE user_id=? ORDER BY pinned DESC, updated_at DESC",
-            (user_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM notes WHERE user_id=%s ORDER BY pinned DESC, updated_at DESC",
+                (user_id,),
+            )
+            rows = cur.fetchall()
+        return _serialize_rows(rows)
+    finally:
+        con.close()
 
 
 def create_note(user_id: int, title: str, body: str, color: str = "default") -> dict:
-    with _con() as con:
-        cur = con.execute(
-            "INSERT INTO notes (user_id, title, body, color) VALUES (?,?,?,?)",
-            (user_id, title.strip(), body.strip(), color),
-        )
-        con.commit()
-        row = con.execute("SELECT * FROM notes WHERE id=?", (cur.lastrowid,)).fetchone()
-    return dict(row)
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "INSERT INTO notes (user_id, title, body, color) VALUES (%s,%s,%s,%s)",
+                (user_id, title.strip(), body.strip(), color),
+            )
+            con.commit()
+            nid = cur.lastrowid
+            cur.execute("SELECT * FROM notes WHERE id=%s", (nid,))
+            row = cur.fetchone()
+        return _serialize_row(row)
+    finally:
+        con.close()
 
 
 def update_note(note_id: int, user_id: int, title: str, body: str, color: str, pinned: bool) -> dict | None:
-    with _con() as con:
-        con.execute(
-            "UPDATE notes SET title=?, body=?, color=?, pinned=?, updated_at=datetime('now') WHERE id=? AND user_id=?",
-            (title.strip(), body.strip(), color, 1 if pinned else 0, note_id, user_id),
-        )
-        con.commit()
-        row = con.execute("SELECT * FROM notes WHERE id=? AND user_id=?", (note_id, user_id)).fetchone()
-    return dict(row) if row else None
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "UPDATE notes SET title=%s, body=%s, color=%s, pinned=%s WHERE id=%s AND user_id=%s",
+                (title.strip(), body.strip(), color, 1 if pinned else 0, note_id, user_id),
+            )
+            con.commit()
+            cur.execute("SELECT * FROM notes WHERE id=%s AND user_id=%s", (note_id, user_id))
+            row = cur.fetchone()
+        return _serialize_row(row) if row else None
+    finally:
+        con.close()
 
 
 def delete_note(note_id: int, user_id: int) -> bool:
-    with _con() as con:
-        cur = con.execute("DELETE FROM notes WHERE id=? AND user_id=?", (note_id, user_id))
-        con.commit()
-    return cur.rowcount > 0
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("DELETE FROM notes WHERE id=%s AND user_id=%s", (note_id, user_id))
+            con.commit()
+            return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+# ---------------------------------------------------------------------------
+# Платежи (Robokassa)
+# ---------------------------------------------------------------------------
+def create_payment(user_id: int, inv_id: int, amount: float, description: str) -> dict:
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("""
+                INSERT INTO payments (user_id, inv_id, amount, description, status)
+                VALUES (%s,%s,%s,%s,'pending')
+                ON DUPLICATE KEY UPDATE status='pending'
+            """, (user_id, inv_id, amount, description))
+            con.commit()
+            cur.execute("SELECT * FROM payments WHERE inv_id=%s", (inv_id,))
+            return _serialize_row(cur.fetchone())
+    finally:
+        con.close()
+
+
+def confirm_payment(inv_id: int) -> Optional[dict]:
+    """Помечает платёж как оплаченный и продлевает доступ на 92 дня (квартал)."""
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM payments WHERE inv_id=%s", (inv_id,))
+            payment = cur.fetchone()
+            if not payment:
+                return None
+            cur.execute(
+                "UPDATE payments SET status='paid', paid_at=NOW() WHERE inv_id=%s",
+                (inv_id,)
+            )
+            # продлеваем access_until на 92 дня
+            cur.execute("""
+                UPDATE users SET access_until = DATE_ADD(
+                    GREATEST(IFNULL(access_until, NOW()), NOW()),
+                    INTERVAL 92 DAY
+                ) WHERE id=%s
+            """, (payment["user_id"],))
+            con.commit()
+            return _serialize_row(payment)
+    finally:
+        con.close()
+
+
+def get_payment_by_inv(inv_id: int) -> Optional[dict]:
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute("SELECT * FROM payments WHERE inv_id=%s", (inv_id,))
+            row = cur.fetchone()
+        return _serialize_row(row) if row else None
+    finally:
+        con.close()
+
+
+# ---------------------------------------------------------------------------
+# Утилиты
+# ---------------------------------------------------------------------------
+def _serialize_row(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return row
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, datetime):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
+
+
+def _serialize_rows(rows) -> list[dict]:
+    return [_serialize_row(dict(r)) for r in rows]
