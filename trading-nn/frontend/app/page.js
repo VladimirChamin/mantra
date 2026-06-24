@@ -563,55 +563,94 @@ export default function Dashboard() {
 
   const isAdminSub = adminSubTabs.some(([k]) => k === tab);
 
+  const NAV_ICONS = {
+    signal:        "◈",
+    screener:      "⊞",
+    subscriptions: "◉",
+    admin:         "⚙",
+    classes:       "▣",
+    backtest:      "▷",
+    metrics:       "▦",
+    profile:       "○",
+  };
+
+  const allNavItems = [
+    ...mainTabs,
+    ...(isAdmin && (tab === "admin" || isAdminSub) ? adminSubTabs : []),
+    ["profile", "Профиль"],
+  ];
+
   return (
-    <div className="shell">
-      <div className="topbar">
+    <div className="app-layout">
+
+      {/* ── Левый сайдбар ── */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <span className="sidebar-logo">M</span>
+          <span className="sidebar-title">MANTRA</span>
+          <span className={`dot ${online ? "live" : "down"}`} style={{ marginLeft: 4 }} />
+        </div>
+
+        <nav className="sidebar-nav">
+          {mainTabs.map(([k, label]) => {
+            const isActive = tab === k || (k === "admin" && isAdminSub);
+            return (
+              <button key={k}
+                className={`nav-item ${isActive ? "active" : ""}`}
+                onClick={() => setTab(k)}
+              >
+                <span className="nav-icon">{NAV_ICONS[k] || "◆"}</span>
+                <span className="nav-label">{label}</span>
+                {isActive && <span className="nav-pip" />}
+              </button>
+            );
+          })}
+
+          {/* подменю Админки */}
+          {isAdmin && (tab === "admin" || isAdminSub) && (
+            <div className="nav-sub">
+              {adminSubTabs.map(([k, label]) => (
+                <button key={k}
+                  className={`nav-sub-item ${tab === k ? "active" : ""}`}
+                  onClick={() => setTab(k)}
+                >
+                  <span className="nav-icon">{NAV_ICONS[k] || "·"}</span>
+                  <span className="nav-label">{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </nav>
+
+        <div className="sidebar-foot">
+          {currentUser && (
+            <>
+              <button onClick={() => setTab("profile")}
+                className={`nav-item nav-profile ${tab === "profile" ? "active" : ""}`}>
+                <span className="user-avatar-sm">{(currentUser.name || currentUser.email || "?")[0].toUpperCase()}</span>
+                <div className="nav-profile-info">
+                  <span className="nav-label">{currentUser.name || currentUser.email}</span>
+                  {isAdmin && <span className="role-badge" style={{ fontSize: 9, padding: "1px 5px" }}>admin</span>}
+                </div>
+              </button>
+              <button onClick={logout} className="sidebar-logout">Выйти</button>
+            </>
+          )}
+        </div>
+      </aside>
+
+      {/* ── Мобильный хедер ── */}
+      <header className="mobile-header">
         <div className="brand">
           <h1>MANTRA</h1>
           <span className={`dot ${online ? "live" : "down"}`} style={{ marginLeft: 6 }} />
         </div>
-
-        {/* десктоп: имя пользователя + профиль + выход */}
-        <div className="topbar-user desktop-only">
-          {currentUser && (
-            <>
-              <button onClick={() => setTab("profile")} className="user-pill">
-                <span className="user-avatar">{(currentUser.name || currentUser.email || "?")[0].toUpperCase()}</span>
-                <span className="user-name">{currentUser.name || currentUser.email}</span>
-                {isAdmin && <span className="role-badge">admin</span>}
-              </button>
-              <button onClick={logout} className="logout-btn">Выйти</button>
-            </>
-          )}
-        </div>
-
-        {/* гамбургер — только мобиле */}
         <button className="hamburger" onClick={() => setMenuOpen(o => !o)} aria-label="Меню">
           <span /><span /><span />
         </button>
-      </div>
+      </header>
 
-      {/* десктопные табы */}
-      <div className="tabs desktop-tabs">
-        {mainTabs.map(([k, label]) => (
-          <button key={k} className={`tab ${(tab === k || (k === "admin" && isAdminSub)) ? "active" : ""}`} onClick={() => setTab(k)}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* подменю Админки */}
-      {isAdmin && (tab === "admin" || isAdminSub) && (
-        <div className="subtabs desktop-tabs">
-          {adminSubTabs.map(([k, label]) => (
-            <button key={k} className={`subtab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* мобильное меню-дровер */}
+      {/* ── Мобильный дровер ── */}
       {menuOpen && (
         <div className="mobile-menu">
           <div className="mobile-menu-overlay" onClick={() => setMenuOpen(false)} />
@@ -626,7 +665,7 @@ export default function Dashboard() {
                 <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{isAdmin ? "Администратор" : "Пользователь"}</div>
               </div>
             )}
-            {[...mainTabs, ...(isAdmin ? adminSubTabs : []), ["profile", "Профиль"]].map(([k, label]) => (
+            {allNavItems.map(([k, label]) => (
               <button key={k}
                 className={`mobile-tab ${tab === k ? "active" : ""}`}
                 onClick={() => { setTab(k); setMenuOpen(false); }}
@@ -638,6 +677,9 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Основной контент ── */}
+      <main className="main-content">
 
 
 
@@ -1105,11 +1147,9 @@ export default function Dashboard() {
       <style>{`
         .hamburger { display: none; flex-direction: column; gap: 5px; background: none; border: none; cursor: pointer; padding: 6px; }
         .hamburger span { display: block; width: 22px; height: 2px; background: var(--text); border-radius: 2px; }
-        .desktop-tabs { display: flex; }
         .mobile-menu { display: none; }
-        @media (max-width: 700px) {
+        @media (max-width: 860px) {
           .hamburger { display: flex; }
-          .desktop-tabs { display: none; }
           .mobile-menu { display: block; position: fixed; inset: 0; z-index: 200; }
           .mobile-menu-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.3); }
           .mobile-menu-drawer {
@@ -1226,6 +1266,7 @@ export default function Dashboard() {
           )}
         </>
       )}
+      </main>
     </div>
   );
 }
