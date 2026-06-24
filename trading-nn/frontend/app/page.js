@@ -1280,6 +1280,11 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
   const [pwErr, setPwErr] = useState("");
   const [pwLoading, setPwLoading] = useState(false);
 
+  const [delOpen, setDelOpen] = useState(false);
+  const [delConfirm, setDelConfirm] = useState("");
+  const [delLoading, setDelLoading] = useState(false);
+  const [delErr, setDelErr] = useState("");
+
   async function changePassword(e) {
     e.preventDefault();
     setPwMsg(""); setPwErr("");
@@ -1292,6 +1297,18 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
       setCurPw(""); setNewPw(""); setConfPw("");
     } catch (e) { setPwErr(e.message); }
     setPwLoading(false);
+  }
+
+  async function deleteAccount() {
+    if (delConfirm !== "УДАЛИТЬ") return;
+    setDelLoading(true); setDelErr("");
+    try {
+      await api.deleteOwnAccount();
+      logout();
+    } catch (e) {
+      setDelErr(e.message);
+      setDelLoading(false);
+    }
   }
 
   if (!user) return null;
@@ -1346,6 +1363,17 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
             Выйти из аккаунта
           </button>
         </div>
+
+        <div className="card" style={{ border: "1px solid var(--short)" }}>
+          <h2 style={{ color: "var(--short)", marginBottom: 8 }}>Удаление аккаунта</h2>
+          <p style={{ fontSize: 13, color: "var(--muted)", margin: "0 0 12px" }}>
+            Удаляет аккаунт, все прогнозы, историю и AI-анализы без возможности восстановления.
+          </p>
+          <button onClick={() => { setDelOpen(true); setDelConfirm(""); setDelErr(""); }}
+            className="btn" style={{ background: "none", border: "1px solid var(--short)", color: "var(--short)" }}>
+            Удалить аккаунт
+          </button>
+        </div>
       </div>
 
       {/* правая колонка — смена пароля */}
@@ -1363,6 +1391,66 @@ function ProfileTab({ user, aiQuota, isAdmin }) {
           <button type="submit" className="btn" disabled={pwLoading}>{pwLoading ? "Сохранение…" : "Сменить пароль"}</button>
         </form>
       </div>
+
+      {/* Модальное окно подтверждения удаления */}
+      {delOpen && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 300,
+          background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          padding: 16,
+        }} onClick={e => { if (e.target === e.currentTarget) setDelOpen(false); }}>
+          <div style={{
+            background: "var(--panel)", borderRadius: 16,
+            border: "1.5px solid var(--short)",
+            padding: "28px 28px 24px", maxWidth: 440, width: "100%",
+            boxShadow: "0 8px 40px rgba(0,0,0,.22)",
+          }}>
+            <div style={{ fontSize: 22, marginBottom: 6 }}>⚠️</div>
+            <h2 style={{ margin: "0 0 10px", color: "var(--short)", fontFamily: "var(--display)", fontSize: 17, letterSpacing: "0.04em" }}>
+              УДАЛЕНИЕ АККАУНТА
+            </h2>
+            <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.6, margin: "0 0 16px" }}>
+              Это действие <strong>необратимо</strong>. Будут удалены:
+            </p>
+            <ul style={{ margin: "0 0 18px", padding: "0 0 0 18px", display: "flex", flexDirection: "column", gap: 6 }}>
+              {["Ваш аккаунт и данные профиля", "Все прогнозы и история сигналов", "Все AI-анализы", "Все подписки на инструменты"].map(item => (
+                <li key={item} style={{ fontSize: 13, color: "var(--muted)" }}>{item}</li>
+              ))}
+            </ul>
+            <div style={{ background: "rgba(220,38,38,.07)", border: "1px solid rgba(220,38,38,.25)", borderRadius: 10, padding: "12px 14px", marginBottom: 18 }}>
+              <div style={{ fontSize: 12, color: "var(--short)", fontWeight: 600, marginBottom: 8, letterSpacing: "0.04em" }}>
+                Для подтверждения введите слово УДАЛИТЬ
+              </div>
+              <input
+                value={delConfirm}
+                onChange={e => setDelConfirm(e.target.value)}
+                placeholder="УДАЛИТЬ"
+                autoFocus
+                style={{
+                  width: "100%", background: "var(--ink-2)", border: "1.5px solid var(--short)",
+                  borderRadius: 8, padding: "9px 12px", fontSize: 14, fontFamily: "var(--mono)",
+                  color: "var(--text)", outline: "none", letterSpacing: "0.08em",
+                }}
+              />
+            </div>
+            {delErr && <div className="error" style={{ marginBottom: 14 }}>{delErr}</div>}
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => setDelOpen(false)}
+                className="btn ghost" style={{ flex: 1 }}>
+                Отмена
+              </button>
+              <button
+                onClick={deleteAccount}
+                disabled={delConfirm !== "УДАЛИТЬ" || delLoading}
+                className="btn"
+                style={{ flex: 1, background: delConfirm === "УДАЛИТЬ" ? "var(--short)" : "var(--short-dim)", color: "#fff", opacity: delConfirm !== "УДАЛИТЬ" ? 0.5 : 1 }}>
+                {delLoading ? "Удаление…" : "Удалить навсегда"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

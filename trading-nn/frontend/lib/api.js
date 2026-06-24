@@ -55,6 +55,7 @@ export const api = {
   deleteAnalysis: (id) => req(`/api/analyses/${id}`, { method: "DELETE" }),
   changePassword: (payload) =>
     req("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
+  deleteOwnAccount: () => req("/api/auth/me", { method: "DELETE" }),
   // Подписки на сигналы
   getSubscriptions: () => req("/api/subscriptions"),
   addSubscription: (payload) =>

@@ -599,6 +599,12 @@ def remove_user(uid: int, admin: dict = Depends(auth.require_admin)):
     auth.delete_user(uid)
     return {"ok": True}
 
+@app.delete("/api/auth/me", tags=["auth"])
+def delete_own_account(user: dict = Depends(auth.get_current_user)):
+    """Удаление собственного аккаунта со всеми данными."""
+    auth.delete_user(user["id"])
+    return {"ok": True}
+
 def _safe_user(u: dict) -> dict:
     return {k: u[k] for k in ("id", "email", "name", "role", "created_at") if k in u}
 
