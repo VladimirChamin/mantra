@@ -39,7 +39,7 @@ if _env_path.exists():
             _v = _v.strip().strip('"').strip("'")
             os.environ.setdefault(_k.strip(), _v)
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, EmailStr
@@ -1301,6 +1301,79 @@ def delete_model(tag: str, _=Depends(auth.require_admin)):
     if not deleted:
         raise HTTPException(404, f"Модель {tag} не найдена")
     return {"ok": True, "deleted": deleted}
+
+
+@app.post("/api/models/upload", tags=["models"])
+async def upload_model(
+    file: UploadFile = File(...),
+    _=Depends(auth.require_admin),
+):
+    """
+    Загружает модель с локальной машины на сервер.
+    Принимает ZIP-архив, содержащий файлы модели:
+      TAG_model.keras, TAG_scaler.pkl, TAG_config.json
+      (опционально: TAG_metrics.json, TAG_feature_importance.json)
+    TAG определяется из имён файлов внутри архива.
+    """
+    import zipfile, io, shutil, tempfile
+
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(400, "Ожидается ZIP-архив")
+
+    content = await file.read()
+    if len(content) > 500 * 1024 * 1024:  # 500 MB
+        raise HTTPException(413, "Файл слишком большой (макс. 500 MB)")
+
+    model_dir = "models"
+    os.makedirs(model_dir, exist_ok=True)
+
+    ALLOWED_SUFFIXES = (
+        "_model.keras", "_scaler.pkl", "_config.json",
+        "_metrics.json", "_feature_importance.json",
+    )
+    REQUIRED_SUFFIXES = ("_model.keras", "_scaler.pkl", "_config.json")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = zf.namelist()
+
+            # Определяем TAG из имён файлов (берём из первого _model.keras)
+            tag = None
+            for name in names:
+                bare = os.path.basename(name)
+                if bare.endswith("_model.keras"):
+                    tag = bare[: -len("_model.keras")]
+                    break
+            if not tag:
+                raise HTTPException(400, "В архиве не найден файл *_model.keras")
+
+            # Проверяем что все обязательные файлы присутствуют
+            present = {os.path.basename(n) for n in names}
+            missing = [tag + s for s in REQUIRED_SUFFIXES if tag + s not in present]
+            if missing:
+                raise HTTPException(400, f"В архиве отсутствуют обязательные файлы: {missing}")
+
+            # Распаковываем только разрешённые файлы
+            saved = []
+            with tempfile.TemporaryDirectory() as tmp:
+                for name in names:
+                    bare = os.path.basename(name)
+                    if not bare or not any(bare.endswith(s) for s in ALLOWED_SUFFIXES):
+                        continue
+                    src = zf.extract(name, tmp)
+                    dst = os.path.join(model_dir, bare)
+                    shutil.move(src, dst)
+                    saved.append(bare)
+
+            # Сбрасываем кэш модели если она уже была загружена
+            tn.invalidate_ohlcv_cache()
+            model_path = os.path.join(model_dir, f"{tag}_model.keras")
+            tn._MODEL_CACHE.pop(model_path, None)
+
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Повреждённый ZIP-архив")
+
+    return {"ok": True, "tag": tag, "saved": saved}
 
 
 @app.post("/api/models/{tag}/refresh_metrics", tags=["models"])

@@ -82,6 +82,20 @@ export const api = {
   // AUC Monitor
   getModelMetrics: () => req("/api/models/metrics"),
   deleteModel: (tag) => req(`/api/models/${tag}`, { method: "DELETE" }),
+  uploadModel: (file) => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(`${API}/api/models/upload`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    }).then(async r => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `Ошибка ${r.status}`);
+      return data;
+    });
+  },
   refreshModelMetrics: (tag) => req(`/api/models/${tag}/refresh_metrics`, { method: "POST" }),
   getAucMonitor: () => req("/api/auc_monitor"),
   setAucMonitor: (payload) => req("/api/auc_monitor", { method: "POST", body: JSON.stringify(payload) }),

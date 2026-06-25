@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@/lib/api";
 import FeatureEditor from "@/components/FeatureEditor";
 
@@ -167,13 +167,16 @@ export default function ModelMetrics() {
   const [refreshing, setRefreshing] = useState({});
   const [checking, setChecking]     = useState(false);
   const [saved, setSaved]           = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null); // модель для удаления
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting]     = useState(false);
-  // активные модели: null = "все активны", иначе Set тегов
   const [activeTags, setActiveTags] = useState(null);
   const [savingActive, setSavingActive] = useState(false);
   const [savedActive, setSavedActive] = useState(false);
-  const [featModelTag, setFeatModelTag] = useState(null); // тег модели, у которой открыт редактор признаков
+  const [featModelTag, setFeatModelTag] = useState(null);
+  // загрузка модели
+  const [uploading, setUploading]   = useState(false);
+  const [uploadResult, setUploadResult] = useState(null); // {ok, tag, error}
+  const uploadRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -286,6 +289,23 @@ export default function ModelMetrics() {
     return activeTags === null || activeTags.has(tag);
   }
 
+  async function handleUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const res = await api.uploadModel(file);
+      setUploadResult({ ok: true, tag: res.tag, files: res.saved });
+      await load(); // обновляем список моделей
+    } catch (err) {
+      setUploadResult({ ok: false, error: err.message });
+    } finally {
+      setUploading(false);
+      if (uploadRef.current) uploadRef.current.value = "";
+    }
+  }
+
   const critical = metrics.filter(m => m.status === "critical").length;
   const warn     = metrics.filter(m => m.status === "warn").length;
   const unknown  = metrics.filter(m => m.status === "unknown").length;
@@ -316,6 +336,54 @@ export default function ModelMetrics() {
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{label}</div>
           </div>
         ))}
+      </div>
+
+      {/* Загрузка модели с локальной машины */}
+      <div style={{
+        padding: "14px 18px", borderRadius: 10, marginBottom: 16,
+        border: "1px solid var(--line)", background: "var(--panel)",
+        display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
+      }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: "var(--text)", marginBottom: 3 }}>
+            Загрузить модель с локальной машины
+          </div>
+          <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.5 }}>
+            ZIP-архив с файлами: <span style={{ fontFamily: "var(--mono)" }}>TAG_model.keras, TAG_scaler.pkl, TAG_config.json</span>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <input
+            ref={uploadRef}
+            type="file"
+            accept=".zip"
+            style={{ display: "none" }}
+            onChange={handleUpload}
+          />
+          <button
+            className="btn"
+            style={{ width: "auto", padding: "8px 20px", fontSize: 13, display: "flex", alignItems: "center", gap: 7 }}
+            onClick={() => uploadRef.current?.click()}
+            disabled={uploading}
+          >
+            {uploading
+              ? <><span className="spinner" style={{ width: 13, height: 13, borderColor: "rgba(255,255,255,0.3)", borderTopColor: "#fff" }} /> Загрузка…</>
+              : "↑ Загрузить ZIP"}
+          </button>
+          {uploadResult && (
+            <div style={{
+              fontSize: 12, padding: "6px 12px", borderRadius: 8,
+              background: uploadResult.ok ? "rgba(16,185,129,.1)" : "rgba(239,68,68,.1)",
+              color: uploadResult.ok ? "var(--long)" : "var(--short)",
+              border: `1px solid ${uploadResult.ok ? "rgba(16,185,129,.25)" : "rgba(239,68,68,.25)"}`,
+              maxWidth: 320,
+            }}>
+              {uploadResult.ok
+                ? <>✓ Модель <span style={{ fontFamily: "var(--mono)", fontWeight: 700 }}>{uploadResult.tag}</span> загружена ({uploadResult.files?.length} файлов)</>
+                : <>✕ {uploadResult.error}</>}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Настройки монитора */}
