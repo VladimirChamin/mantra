@@ -10,6 +10,8 @@ function CallbackInner() {
     const token = params.get("token");
     const user  = params.get("user");
 
+    if (!token && !user) return;
+
     if (user) {
       try { localStorage.setItem("user", user); } catch {}
     }
@@ -20,7 +22,7 @@ function CallbackInner() {
     } else {
       window.location.href = "/";
     }
-  }, []);
+  }, [params]);
 
   return null;
 }
