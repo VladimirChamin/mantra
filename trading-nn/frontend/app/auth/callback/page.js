@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 
-export default function AuthCallback() {
+function CallbackInner() {
   const params = useSearchParams();
 
   useEffect(() => {
@@ -16,20 +16,29 @@ export default function AuthCallback() {
 
     if (token) {
       localStorage.setItem("token", token);
-      // переходим через API route — он ставит cookie через HTTP Set-Cookie header
-      // и редиректит на главную, поэтому middleware увидит cookie сразу
       window.location.href = `/api/auth/set-cookie?token=${encodeURIComponent(token)}&redirect=/`;
     } else {
       window.location.href = "/";
     }
   }, []);
 
+  return null;
+}
+
+const Spinner = () => (
+  <div style={{
+    minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+    background: "var(--ink)",
+  }}>
+    <span className="spinner" style={{ width: 24, height: 24 }} />
+  </div>
+);
+
+export default function AuthCallback() {
   return (
-    <div style={{
-      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: "var(--ink)",
-    }}>
-      <span className="spinner" style={{ width: 24, height: 24 }} />
-    </div>
+    <Suspense fallback={<Spinner />}>
+      <Spinner />
+      <CallbackInner />
+    </Suspense>
   );
 }
