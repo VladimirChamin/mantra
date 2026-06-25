@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-const LANDING = process.env.NEXT_PUBLIC_LANDING_URL || "http://localhost:3001";
+const LANDING = process.env.NEXT_PUBLIC_LANDING_URL
+  ?? (process.env.NODE_ENV === "production" ? "https://mantrade.ru" : "http://localhost:3001");
 
 export function middleware(request) {
   const token = request.cookies.get("token")?.value

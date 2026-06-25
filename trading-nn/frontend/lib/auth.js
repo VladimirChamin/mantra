@@ -1,7 +1,9 @@
 "use client";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const LANDING = process.env.NEXT_PUBLIC_LANDING_URL || "http://localhost:3001";
+const LANDING = typeof window !== "undefined"
+  ? (window.location.hostname === "localhost" ? "http://localhost:3001" : "https://mantrade.ru")
+  : "https://mantrade.ru";
 
 export function getToken() {
   if (typeof window === "undefined") return null;
