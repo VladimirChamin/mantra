@@ -5,11 +5,15 @@ export async function GET(request) {
   const token = searchParams.get("token");
   const redirectTo = searchParams.get("redirect") || "/";
 
+  const proto = request.headers.get("x-forwarded-proto") || "https";
+  const host  = request.headers.get("x-forwarded-host") || request.headers.get("host") || "app.mantrade.ru";
+  const base  = `${proto}://${host}`;
+
   if (!token) {
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.redirect(new URL("/", base));
   }
 
-  const response = NextResponse.redirect(new URL(redirectTo, request.url));
+  const response = NextResponse.redirect(new URL(redirectTo, base));
   response.cookies.set("token", token, {
     path: "/",
     maxAge: 7 * 24 * 3600,
