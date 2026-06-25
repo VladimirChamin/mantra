@@ -70,7 +70,7 @@ class Config:
     # --- разметка целей (Triple-Barrier) ---
     horizon: int = 10             # горизонт прогноза в барах
     tp_atr_mult: float = 1.5      # тейк = entry +/- tp_atr_mult * ATR
-    sl_atr_mult: float = 1.0      # стоп = entry -/+ sl_atr_mult * ATR
+    sl_atr_mult: float = 1.5      # стоп = entry -/+ sl_atr_mult * ATR
     # --- отложенный ордер (BUYSTOP / SELLSTOP) ---
     entry_offset_mult: float = 0.0  # BUYSTOP = close + offset*ATR, 0 = маркет
     fill_prob_threshold: float = 0.45  # мин. p_fill для выдачи сигнала
@@ -103,13 +103,13 @@ class Config:
 # AUC залипает у 0.5. lookback уменьшен на D1 — мало истории, иначе переобучение.
 TIMEFRAME_PRESETS = {
     "1d": dict(horizon=10, lookback=32, period="6y",
-               tp_atr_mult=3.0, sl_atr_mult=1.0, prob_threshold=0.54,
+               tp_atr_mult=3.0, sl_atr_mult=1.5, prob_threshold=0.54,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
     "4h": dict(horizon=12, lookback=48, period="3y",
-               tp_atr_mult=2.5, sl_atr_mult=1.0, prob_threshold=0.55,
+               tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.55,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
     "1h": dict(horizon=24, lookback=64, period="2y",
-               tp_atr_mult=2.5, sl_atr_mult=1.0, prob_threshold=0.56,
+               tp_atr_mult=2.5, sl_atr_mult=1.5, prob_threshold=0.56,
                entry_offset_mult=0.0, fill_prob_threshold=0.45),
 }
 
@@ -340,6 +340,14 @@ def resolve_model_tag(symbol: str, interval: str, model_dir: str = "models",
 # При старте автоматически активируется T-Invest если есть TINVEST_TOKEN в env.
 _DATA_SOURCE = None
 
+# ── Кэш OHLCV: символ+интервал → (DataFrame, timestamp загрузки) ─────────────
+import time as _time_mod
+_OHLCV_CACHE: dict[str, tuple] = {}   # key → (df, loaded_at)
+_OHLCV_TTL   = 300                    # секунды до устаревания (5 минут)
+
+# ── Кэш моделей: путь к файлу → (model, scaler, mtime файла) ────────────────
+_MODEL_CACHE: dict[str, tuple] = {}   # path → (model, scaler, mtime)
+
 
 def set_data_source(fn):
     """Регистрирует свой загрузчик данных: fn(cfg) -> DataFrame[open,high,low,close,volume]."""
@@ -364,15 +372,32 @@ _auto_init_datasource()
 
 
 def load_ohlcv(cfg: Config) -> pd.DataFrame:
-    """Грузит OHLCV через зарегистрированный источник данных."""
-    if _DATA_SOURCE is not None:
-        df = _DATA_SOURCE(cfg)
-        print(f"[data] Загружено {len(df)} баров {cfg.symbol} {cfg.interval}")
-        return df
-    raise RuntimeError(
-        f"Источник данных не настроен. "
-        "Добавьте TINVEST_TOKEN в .env или выберите источник в интерфейсе."
-    )
+    """Грузит OHLCV через зарегистрированный источник данных. Кэш 5 минут."""
+    if _DATA_SOURCE is None:
+        raise RuntimeError(
+            "Источник данных не настроен. "
+            "Добавьте TINVEST_TOKEN в .env или выберите источник в интерфейсе."
+        )
+    cache_key = f"{cfg.symbol}_{cfg.interval}"
+    now = _time_mod.time()
+    if cache_key in _OHLCV_CACHE:
+        df_cached, loaded_at = _OHLCV_CACHE[cache_key]
+        if now - loaded_at < _OHLCV_TTL:
+            print(f"[data] Кэш: {len(df_cached)} баров {cfg.symbol} {cfg.interval} "
+                  f"(обновлён {int(now - loaded_at)}с назад)")
+            return df_cached
+    df = _DATA_SOURCE(cfg)
+    _OHLCV_CACHE[cache_key] = (df, now)
+    print(f"[data] Загружено {len(df)} баров {cfg.symbol} {cfg.interval}")
+    return df
+
+
+def invalidate_ohlcv_cache(symbol: str | None = None, interval: str | None = None):
+    """Сбрасывает кэш OHLCV — вызывать после подкачки актуальных данных."""
+    if symbol and interval:
+        _OHLCV_CACHE.pop(f"{symbol}_{interval}", None)
+    else:
+        _OHLCV_CACHE.clear()
 
 
 # Индексы для расчёта relative strength по классу активов
@@ -1141,16 +1166,18 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
     if cancel_event and cancel_event.is_set():
         return model, scaler
 
-    model.save(paths["model"])
+    # ModelCheckpoint уже сохранил лучшие веса — не перезаписываем model.save()
     joblib.dump(scaler, paths["scaler"])
     with open(paths["config"], "w") as f:
         json.dump(asdict(cfg), f, indent=2)
 
-    # сохраняем метрики val AUC
-    val_auc = _compute_val_auc(model, Xva, yva[0])
+    # загружаем лучшую модель с диска для точного расчёта метрик
+    import tensorflow as _tf
+    best_model = _tf.keras.models.load_model(paths["model"])
+    val_auc = _compute_val_auc(best_model, Xva, yva[0])
     _save_metrics(cfg, val_auc)
     print(f"[train] Сохранено: {paths['model']}  val_auc={val_auc:.4f}")
-    return model, scaler
+    return best_model, scaler
 
 
 def _save_versioned(cfg: "Config", model, val_auc: float) -> str:
@@ -1322,21 +1349,22 @@ def train_universal(symbols: list[str], interval: str = "1d",
     if cancel_event and cancel_event.is_set():
         return model, scalers
 
-    model.save(paths["model"])
-    # сохраняем scaler первого инструмента как «эталонный»
+    # ModelCheckpoint уже сохранил лучшие веса — не перезаписываем
     joblib.dump(next(iter(scalers.values())), paths["scaler"])
     with open(paths["config"], "w") as f:
         json.dump(asdict(cfg_proto), f, indent=2)
 
-    val_auc = _compute_val_auc(model, Xva, yva[0])
+    import tensorflow as _tf
+    best_model = _tf.keras.models.load_model(paths["model"])
+    val_auc = _compute_val_auc(best_model, Xva, yva[0])
     _save_metrics(cfg_proto, val_auc)
 
     # версионирование: сохраняем копию с индексом TAG_interval_vN.keras
-    _save_versioned(cfg_proto, model, val_auc)
+    _save_versioned(cfg_proto, best_model, val_auc)
 
     _log(f"[universal] Модель сохранена: {paths['model']}  val_auc={val_auc:.4f}")
     _log(f"[universal] Обучена на: {', '.join(scalers.keys())}")
-    return model, scalers
+    return best_model, scalers
 
 
 def retrain(cfg: Config):
@@ -1367,10 +1395,26 @@ def load_artifacts(cfg: Config, active_tags: list[str] | None = None):
         symbol=tag.rsplit("_", 1)[0], interval=cfg.interval, model_dir=cfg.model_dir
     )
     paths = _paths(load_cfg)
+    model_path = paths["model"]
 
-    model = tf.keras.models.load_model(paths["model"],
-                                       custom_objects={"LastStep": LastStep})
-    scaler = joblib.load(paths["scaler"])
+    # кэш модели: перезагружаем только если файл изменился (новое обучение)
+    mtime = os.path.getmtime(model_path) if os.path.exists(model_path) else 0
+    if model_path in _MODEL_CACHE:
+        m_cached, s_cached, mt_cached = _MODEL_CACHE[model_path]
+        if mt_cached == mtime:
+            print(f"[infer] Модель из кэша: {model_path}")
+            model, scaler = m_cached, s_cached
+        else:
+            print(f"[infer] Модель обновлена на диске, перезагружаем: {model_path}")
+            model  = tf.keras.models.load_model(model_path, custom_objects={"LastStep": LastStep})
+            scaler = joblib.load(paths["scaler"])
+            _MODEL_CACHE[model_path] = (model, scaler, mtime)
+    else:
+        print(f"[infer] Загружаем модель: {model_path}")
+        model  = tf.keras.models.load_model(model_path, custom_objects={"LastStep": LastStep})
+        scaler = joblib.load(paths["scaler"])
+        _MODEL_CACHE[model_path] = (model, scaler, mtime)
+
     with open(paths["config"]) as f:
         saved = json.load(f)
     cfg.feature_cols = saved["feature_cols"]
@@ -1601,18 +1645,22 @@ def predict_signal(cfg: Config, df: pd.DataFrame | None = None) -> dict:
     price = float(df["close"].iloc[-1])
     atr = float(feats["atr"].iloc[-1])
 
-    # Клэмпим ATR: не менее 0.1% и не более 3% от цены
-    atr_clamped = float(np.clip(atr, 0.001 * price, 0.03 * price))
+    # ATR(14) — нижняя страховка: стоп не может быть уже одной свечи
+    atr_clamped = float(np.clip(atr, 0.001 * price, 0.05 * price))
     offset = cfg.entry_offset_mult  # смещение ордера
 
-    # fwd_vol — относительная волатильность (доля от цены), клэмпим до разумного диапазона
-    # Максимум 2% в абсолютном выражении, чтобы SL не был огромным
-    vol_frac = float(np.clip(fwd_vol, 0.001, 0.02))
-    vol_abs  = max(vol_frac * price, 0.2 * atr_clamped)
-    # Итоговый vol_abs не может превышать 2% от цены
-    vol_abs  = min(vol_abs, 0.02 * price)
-    sl_dist = cfg.sl_atr_mult * vol_abs
-    tp_dist = cfg.tp_atr_mult * vol_abs
+    # fwd_vol — предсказание модели: реализованная волатильность доходностей
+    # на горизонте прогноза (std однобаровых ret). Переводим в абс. расстояние.
+    # Клэмп: минимум 0.3% от цены (не уже шума), максимум 8% (защита от выбросов).
+    vol_frac = float(np.clip(fwd_vol, 0.003, 0.08))
+    vol_abs  = vol_frac * price
+
+    # SL от нейросети: sl_atr_mult × vol_abs (модель сама предсказала волатильность).
+    # Страховка снизу: не уже 0.8 × ATR, чтобы стоп не попал в зону обычного шума свечи.
+    sl_dist = max(cfg.sl_atr_mult * vol_abs, 0.8 * atr_clamped)
+
+    # TP: tp_atr_mult × vol_abs, но не меньше sl_dist × min_rr
+    tp_dist = max(cfg.tp_atr_mult * vol_abs, sl_dist * cfg.min_rr)
 
     # выбор направления (с учётом p_fill — комбинированная вероятность)
     direction = "FLAT"

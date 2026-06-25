@@ -160,7 +160,8 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     ...(showIndicators ? pivotLines.map(l => l.v) : []),
     ...(showIndicators ? bbUPts.filter(p => p.x >= effStart && p.x < effStart + effCount).map(p => p.v) : []),
     ...(showIndicators ? bbLPts.filter(p => p.x >= effStart && p.x < effStart + effCount).map(p => p.v) : []),
-    ...visA.map(b => b.close),
+    ...visA.filter(b => b.high != null).map(b => b.high),
+    ...visA.filter(b => b.low  != null).map(b => b.low),
   ];
   if (hasTrade) vals.push(levels.entry, levels.stop_loss, levels.take_profit);
   let lo = vals.length ? Math.min(...vals) : 0;
@@ -245,12 +246,14 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     const svgX = ((e.clientX - rect.left) / rect.width) * W;
     const idx  = effStart + Math.floor((svgX - padL) / barW);
     if (idx < effStart || idx >= effStart + effCount) { setHover(null); return; }
-    const isForecast = idx >= hN;
-    const bar = isForecast ? forecast[idx - hN] : history[idx];
+    const actualIdx = idx - hN;
+    const isActual   = actualIdx >= 0 && actualIdx < actualBars.length && actualBars[actualIdx]?.open != null;
+    const isForecast = idx >= hN && !isActual;
+    const bar = isActual ? actualBars[actualIdx] : isForecast ? forecast[idx - hN] : history[idx];
     if (!bar) { setHover(null); return; }
     const cx = xBar(idx);
     const mainPrice = bar.close ?? bar.mid;
-    setHover({ idx, cx, cy: yv(mainPrice), bar, isForecast });
+    setHover({ idx, cx, cy: yv(mainPrice), bar, isForecast, isActual });
   }
 
   // прогнозные цены-пилюли
@@ -573,38 +576,37 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                   })
               }
 
-              {/* Реальные котировки — чёрная линия по close */}
-              {actualBars.length > 0 && (() => {
-                // строим точки: начинаем с last history close, затем каждый actual close
-                const lastHistBar = history[hN - 1];
-                const anchorIdx = hN - 1;
-                const pts = [];
-                if (anchorIdx >= effStart && anchorIdx < effStart + effCount && lastHistBar?.close != null) {
-                  pts.push({ gi: anchorIdx, close: lastHistBar.close });
-                }
-                actualBars.forEach((bar, i) => {
-                  const gi = hN + i;
-                  if (gi >= effStart && gi < effStart + effCount && bar.close != null) {
-                    pts.push({ gi, close: bar.close });
-                  }
-                });
-                if (pts.length < 2) return null;
-                const d = pts.map((p, i) =>
-                  `${i === 0 ? "M" : "L"}${xBar(p.gi).toFixed(1)},${yv(p.close).toFixed(1)}`
-                ).join(" ");
+              {/* Реальные котировки — свечи поверх прогноза */}
+              {actualBars.length > 0 && actualBars.map((bar, i) => {
+                const gi = hN + i;
+                if (gi < effStart || gi >= effStart + effCount) return null;
+                if (bar.open == null || bar.close == null) return null;
+                const cx = xBar(gi);
+                const isUp = bar.close >= bar.open;
+                const col = isUp ? "var(--long)" : "var(--short)";
+                const bodyTop = yv(Math.max(bar.open, bar.close));
+                const bodyH   = Math.max(yv(Math.min(bar.open, bar.close)) - bodyTop, 1);
+                const isHov   = hover?.idx === gi && hover?.isActual;
                 return (
-                  <g key="actuals-line">
-                    {/* тонкая белая обводка для контраста на цветных свечах */}
-                    <path d={d} fill="none" stroke="var(--panel)" strokeWidth="3.5" opacity="0.55" />
-                    <path d={d} fill="none" stroke="var(--text)" strokeWidth="1.8" opacity="0.9" />
-                    {/* точки на каждом баре */}
-                    {pts.slice(1).map((p, i) => (
-                      <circle key={i} cx={xBar(p.gi)} cy={yv(p.close)} r="2.2"
-                              fill="var(--text)" opacity="0.85" />
-                    ))}
+                  <g key={`actual-${gi}`}>
+                    {/* фитиль */}
+                    {bar.high != null && bar.low != null && (
+                      <line x1={cx} y1={yv(bar.high)} x2={cx} y2={yv(bar.low)}
+                            stroke={col} strokeWidth="1.2" />
+                    )}
+                    {/* тело — непрозрачное с белой обводкой для отличия от прогноза */}
+                    <rect x={cx - candleW / 2} y={bodyTop}
+                          width={candleW} height={bodyH}
+                          fill={col}
+                          stroke="var(--panel)" strokeWidth="1.2"
+                          opacity={isHov ? 1 : 0.95} />
+                    <rect x={cx - candleW / 2} y={bodyTop}
+                          width={candleW} height={bodyH}
+                          fill="none"
+                          stroke={col} strokeWidth="0.5" opacity="0.6" />
                   </g>
                 );
-              })()}
+              })}
 
               {/* Уровни сделки */}
               {levelLines.map((l, i) => (
@@ -642,7 +644,13 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
             {/* Hover tooltip внутри SVG */}
             {hover && (() => {
               const b = hover.bar;
-              const lines = hover.isForecast
+              const lines = hover.isActual
+                ? [
+                    b.time ? String(b.time).slice(0, 16).replace("T", " ") : `Реал. бар ${hover.idx - hN + 1}`,
+                    `O: ${fmtN(b.open)}  H: ${fmtN(b.high)}`,
+                    `L: ${fmtN(b.low)}   C: ${fmtN(b.close)}`,
+                  ].filter(Boolean)
+                : hover.isForecast
                 ? [
                     `O: ${fmtN(b.open ?? b.mid)}`,
                     `H: ${fmtN(b.high ?? b.mid)}`,
@@ -667,7 +675,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                         fill="var(--panel)" stroke="var(--line)" strokeWidth="1" opacity="0.95" />
                   {lines.map((ln, li) => (
                     <text key={li} x={tx + 6} y={ty + 13 + li * 13}
-                          fill={hover.isForecast ? accentColor : "var(--text)"}
+                          fill={hover.isActual ? "var(--text)" : hover.isForecast ? accentColor : "var(--text)"}
                           fontSize="9" fontFamily="var(--mono)">{ln}</text>
                   ))}
                 </g>

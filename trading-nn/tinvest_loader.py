@@ -50,6 +50,8 @@ _PROXY = os.environ.get("TINVEST_PROXY", "").strip() or None
 
 def _session() -> requests.Session:
     """Session с автоматическим retry на сетевые ошибки и 5xx."""
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     s = requests.Session()
     retry = Retry(
         total=3,
@@ -60,6 +62,7 @@ def _session() -> requests.Session:
     )
     adapter = HTTPAdapter(max_retries=retry)
     s.mount("https://", adapter)
+    s.verify = False  # tbank.ru использует self-signed cert в цепочке
     if _PROXY:
         s.proxies = {"https": _PROXY, "http": _PROXY}
     return s
