@@ -128,8 +128,13 @@ def init_db() -> None:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             cur.execute("""
-                ALTER TABLE signals ADD COLUMN IF NOT EXISTS actuals_json LONGTEXT
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'signals'
+                  AND COLUMN_NAME = 'actuals_json'
             """)
+            if cur.fetchone()[0] == 0:
+                cur.execute("ALTER TABLE signals ADD COLUMN actuals_json LONGTEXT")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS active_models (
                     id         INT AUTO_INCREMENT PRIMARY KEY,
