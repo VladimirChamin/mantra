@@ -1174,7 +1174,9 @@ def save_signal_actuals(
                 dt = dt.tz_localize(df.index.tz) if dt.tzinfo is None else dt.tz_convert(df.index.tz)
             else:
                 dt = dt.tz_localize(None) if dt.tzinfo is not None else dt
-            df = df[df.index > dt]
+            # отступ = один шаг таймфрейма, чтобы захватить следующую свечу после from_time
+            interval_step = {"1d": "1D", "4h": "4h", "1h": "1h"}.get(sig["interval"], "1D")
+            df = df[df.index >= dt + pd.Timedelta(interval_step)]
 
         df = df.head(steps + 1)
         bars = [
