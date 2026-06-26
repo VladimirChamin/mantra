@@ -46,8 +46,11 @@ def _route(cfg):
     if asset_class == "crypto":
         return _load_bybit(cfg.symbol, cfg.interval, cfg.period)
 
-    if asset_class in ("stocks", "bonds"):
+    if asset_class in ("stocks_ru", "bonds", "stocks"):
         return _load_tinvest(cfg.symbol, cfg.interval, cfg.period)
+
+    if asset_class == "stocks_us":
+        return _load_financialdata(cfg.symbol, cfg.interval, cfg.period)
 
     # forex, commodity — пробуем FinancialData, потом T-Invest
     fd_key = os.environ.get("FINANCIALDATA_API_KEY", "").strip()
@@ -63,4 +66,4 @@ def activate():
     """Регистрирует мультироутер как глобальный источник данных."""
     import trading_nn as tn
     tn.set_data_source(_route)
-    print("[multi_loader] Aktivirovan: crypto->Bybit, stocks/bonds->T-Invest, forex/commodity->FinancialData/T-Invest")
+    print("[multi_loader] Aktivirovan: crypto->Bybit, stocks_ru/bonds->T-Invest, stocks_us->FinancialData, forex/commodity->FinancialData/T-Invest")

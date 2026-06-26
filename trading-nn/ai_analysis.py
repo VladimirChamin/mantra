@@ -672,6 +672,117 @@ def fetch_us_fundamentals(symbol: str) -> Optional[dict]:
         return None
 
 
+# ─── 6b. Фундаментал: США акции через Financial Modeling Prep ────────────────
+
+_FMP_BASE = "https://financialmodelingprep.com/api/v3"
+_FMP_KEY  = os.environ.get("FINANCIALDATA_API_KEY", "")
+
+
+def fetch_us_fundamentals_fmp(symbol: str) -> Optional[dict]:
+    """
+    Фундаментальные данные по акции США через FMP (financialdata.net).
+    Использует тот же API-ключ FINANCIALDATA_API_KEY.
+    """
+    if not _FMP_KEY:
+        log.debug("FINANCIALDATA_API_KEY не задан")
+        return None
+
+    sym = symbol.upper()
+
+    def _get(path, params=None):
+        p = {"apikey": _FMP_KEY, **(params or {})}
+        try:
+            r = httpx.get(f"{_FMP_BASE}{path}", params=p, timeout=FETCH_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            log.debug("FMP %s error: %s", path, e)
+            return None
+
+    def _f(x):
+        try: return round(float(x), 4) if x is not None else None
+        except: return None
+
+    def _big(x):
+        try: return int(float(x)) if x is not None else None
+        except: return None
+
+    # Профиль компании (мультипликаторы + мета)
+    profile_list = _get(f"/profile/{sym}")
+    profile = profile_list[0] if isinstance(profile_list, list) and profile_list else {}
+
+    # Ключевые метрики TTM
+    metrics_list = _get(f"/key-metrics-ttm/{sym}")
+    metrics = metrics_list[0] if isinstance(metrics_list, list) and metrics_list else {}
+
+    # Финансовые показатели (рентабельность)
+    ratios_list = _get(f"/ratios-ttm/{sym}")
+    ratios = ratios_list[0] if isinstance(ratios_list, list) and ratios_list else {}
+
+    # Последний отчёт P&L
+    income_list = _get(f"/income-statement/{sym}", {"limit": 1})
+    income = income_list[0] if isinstance(income_list, list) and income_list else {}
+
+    # Последний балансовый отчёт
+    balance_list = _get(f"/balance-sheet-statement/{sym}", {"limit": 1})
+    balance = balance_list[0] if isinstance(balance_list, list) and balance_list else {}
+
+    # Cash Flow
+    cf_list = _get(f"/cash-flow-statement/{sym}", {"limit": 1})
+    cf = cf_list[0] if isinstance(cf_list, list) and cf_list else {}
+
+    if not profile and not metrics:
+        return None
+
+    return {
+        # Мета
+        "sector":           profile.get("sector"),
+        "industry":         profile.get("industry"),
+        "country":          profile.get("country"),
+        "employees":        profile.get("fullTimeEmployees"),
+        "market_cap":       _big(profile.get("mktCap")),
+        "ev":               _big(metrics.get("enterpriseValueTTM")),
+        # Мультипликаторы
+        "pe":               _f(metrics.get("peRatioTTM")),
+        "forward_pe":       _f(ratios.get("priceEarningsRatioTTM")),
+        "pb":               _f(metrics.get("pbRatioTTM")),
+        "ps":               _f(metrics.get("priceToSalesRatioTTM")),
+        "ev_ebitda":        _f(metrics.get("evToEbitdaTTM") or ratios.get("enterpriseValueMultipleTTM")),
+        # Рентабельность
+        "roe":              _f(ratios.get("returnOnEquityTTM")),
+        "roa":              _f(ratios.get("returnOnAssetsTTM")),
+        "gross_margin":     _f(ratios.get("grossProfitMarginTTM")),
+        "operating_margin": _f(ratios.get("operatingProfitMarginTTM")),
+        "net_margin":       _f(ratios.get("netProfitMarginTTM")),
+        # Долг
+        "debt_equity":      _f(ratios.get("debtEquityRatioTTM")),
+        "current_ratio":    _f(ratios.get("currentRatioTTM")),
+        "quick_ratio":      _f(ratios.get("quickRatioTTM")),
+        # Рост
+        "revenue_growth":   _f(metrics.get("revenuePerShareTTM")),
+        "earnings_growth":  _f(ratios.get("earningsPerShareTTM")),
+        # Дивиденды
+        "dividend_yield":   _f(metrics.get("dividendYieldTTM")),
+        "payout_ratio":     _f(ratios.get("payoutRatioTTM")),
+        # Прочее
+        "beta":             _f(profile.get("beta")),
+        # P&L из отчёта
+        "revenue":          _big(income.get("revenue")),
+        "gross_profit":     _big(income.get("grossProfit")),
+        "operating_income": _big(income.get("operatingIncome")),
+        "net_income":       _big(income.get("netIncome")),
+        "ebitda":           _big(income.get("ebitda")),
+        # Баланс
+        "total_assets":     _big(balance.get("totalAssets")),
+        "total_liabilities":_big(balance.get("totalLiabilities")),
+        "equity":           _big(balance.get("totalStockholdersEquity")),
+        "cash":             _big(balance.get("cashAndCashEquivalents")),
+        "total_debt":       _big(balance.get("totalDebt")),
+        # Cash Flow
+        "free_cash_flow":   _big(cf.get("freeCashFlow")),
+    }
+
+
 # ─── 5. DeepSeek синтез ───────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """Ты — опытный финансовый аналитик. Твоя задача — дать краткий,
@@ -952,19 +1063,18 @@ def run_analysis(
     # 4. Фундаментальные данные (акции)
     fundamentals = None
     fundamentals_source = ""
-    if asset_class == "stocks":
-        if _is_ru_stock(symbol):
-            try:
-                fundamentals = fetch_ru_fundamentals(symbol)
-                fundamentals_source = "T-Invest"
-            except Exception as e:
-                errors.append(f"RU Fundamentals: {e}")
-        elif _is_us_stock(symbol):
-            try:
-                fundamentals = fetch_us_fundamentals(symbol)
-                fundamentals_source = "Yahoo Finance / yfinance"
-            except Exception as e:
-                errors.append(f"US Fundamentals: {e}")
+    if asset_class in ("stocks_ru", "stocks") and _is_ru_stock(symbol):
+        try:
+            fundamentals = fetch_ru_fundamentals(symbol)
+            fundamentals_source = "T-Invest"
+        except Exception as e:
+            errors.append(f"RU Fundamentals: {e}")
+    elif asset_class == "stocks_us" or (asset_class == "stocks" and _is_us_stock(symbol)):
+        try:
+            fundamentals = fetch_us_fundamentals_fmp(symbol)
+            fundamentals_source = "Financial Modeling Prep"
+        except Exception as e:
+            errors.append(f"US Fundamentals: {e}")
 
     # 5. Новости
     news_items = []

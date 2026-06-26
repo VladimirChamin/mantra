@@ -196,11 +196,20 @@ def make_config(symbol: str, interval: str, **overrides) -> Config:
 # Словарь тикер → класс. Если тикер не найден — используется автодетект.
 ASSET_CLASS_REGISTRY: dict[str, str] = {
     # Акции Мосбиржи
-    "SBER": "stocks", "GAZP": "stocks", "LKOH": "stocks", "GMKN": "stocks",
-    "ROSN": "stocks", "NVTK": "stocks", "TATN": "stocks", "MGNT": "stocks",
-    "MTSS": "stocks", "ALRS": "stocks", "CHMF": "stocks", "PLZL": "stocks",
-    "SNGS": "stocks", "VTBR": "stocks", "MOEX": "stocks", "PHOR": "stocks",
-    "RUAL": "stocks", "YDEX": "stocks", "IMOEX": "stocks", "RTSI": "stocks",
+    "SBER": "stocks_ru", "GAZP": "stocks_ru", "LKOH": "stocks_ru", "GMKN": "stocks_ru",
+    "ROSN": "stocks_ru", "NVTK": "stocks_ru", "TATN": "stocks_ru", "MGNT": "stocks_ru",
+    "MTSS": "stocks_ru", "ALRS": "stocks_ru", "CHMF": "stocks_ru", "PLZL": "stocks_ru",
+    "SNGS": "stocks_ru", "VTBR": "stocks_ru", "MOEX": "stocks_ru", "PHOR": "stocks_ru",
+    "RUAL": "stocks_ru", "YDEX": "stocks_ru", "IMOEX": "stocks_ru", "RTSI": "stocks_ru",
+    # Акции США (FMP / financialdata.net)
+    "AAPL": "stocks_us", "MSFT": "stocks_us", "GOOGL": "stocks_us", "AMZN": "stocks_us",
+    "NVDA": "stocks_us", "META": "stocks_us", "TSLA": "stocks_us", "BRK.B": "stocks_us",
+    "JPM": "stocks_us", "V": "stocks_us", "UNH": "stocks_us", "XOM": "stocks_us",
+    "JNJ": "stocks_us", "WMT": "stocks_us", "MA": "stocks_us", "PG": "stocks_us",
+    "HD": "stocks_us", "CVX": "stocks_us", "MRK": "stocks_us", "ABBV": "stocks_us",
+    "BAC": "stocks_us", "KO": "stocks_us", "PEP": "stocks_us", "AVGO": "stocks_us",
+    "COST": "stocks_us", "AMD": "stocks_us", "NFLX": "stocks_us", "INTC": "stocks_us",
+    "DIS": "stocks_us", "CRM": "stocks_us", "ORCL": "stocks_us", "ADBE": "stocks_us",
     # Крипта (Bybit / любая биржа)
     "BTCUSDT": "crypto", "ETHUSDT": "crypto", "SOLUSDT": "crypto",
     "BNBUSDT": "crypto", "XRPUSDT": "crypto", "ADAUSDT": "crypto",
@@ -228,11 +237,22 @@ ASSET_CLASS_REGISTRY: dict[str, str] = {
 
 # Описания классов для UI
 ASSET_CLASS_META = {
-    "stocks": {
-        "label": "Акции",
-        "description": "Акции Мосбиржи и мировых бирж",
+    "stocks_ru": {
+        "label": "Акции РФ",
+        "description": "Акции Мосбиржи (данные через T-Invest)",
         "default_symbols": ["SBER", "GAZP", "LKOH", "GMKN", "ROSN",
                             "NVTK", "TATN", "MGNT", "YDEX", "MOEX"],
+    },
+    "stocks_us": {
+        "label": "Акции США",
+        "description": "Акции американских бирж (данные через financialdata.net / FMP)",
+        "default_symbols": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
+                            "META", "TSLA", "JPM", "V", "XOM"],
+    },
+    "stocks": {
+        "label": "Акции (прочие)",
+        "description": "Прочие акции мировых бирж",
+        "default_symbols": [],
     },
     "crypto": {
         "label": "Крипта",
@@ -281,6 +301,11 @@ def detect_asset_class(symbol: str) -> str:
     # автодетект форекс по длине и известным валютам
     if len(sym) == 6 and sym.isalpha():
         return "forex"
+
+    # латинские тикеры 1-5 букв → акции США
+    import re as _re
+    if _re.fullmatch(r"[A-Z]{1,5}", sym):
+        return "stocks_us"
 
     # дефолт — акции
     return "stocks"
