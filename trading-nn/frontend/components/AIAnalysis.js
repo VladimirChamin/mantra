@@ -434,20 +434,21 @@ export function AnalysisHistory() {
 export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuotaUpdate, signalId }) {
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState(null);
+  const [isCached, setIsCached] = useState(false);
   const [error, setError]       = useState("");
   const [quota, setQuota]       = useState(initialQuota);
   const [loadingSaved, setLoadingSaved] = useState(false);
 
   useEffect(() => { if (initialQuota) setQuota(initialQuota); }, [initialQuota]);
 
-  // При смене signalId — подгружаем сохранённый анализ
+  // При смене signalId — подгружаем сохранённый анализ (показываем как кэш)
   useEffect(() => {
-    if (!signalId) { setResult(null); return; }
-    setResult(null); setError("");
+    if (!signalId) { setResult(null); setIsCached(false); return; }
+    setResult(null); setIsCached(false); setError("");
     setLoadingSaved(true);
     import("@/lib/api").then(({ api }) =>
       api.getSignalAnalysis(signalId)
-        .then(d => { if (d.result) setResult(d.result); })
+        .then(d => { if (d.result) { setResult(d.result); setIsCached(true); } })
         .catch(() => {})
         .finally(() => setLoadingSaved(false))
     );
@@ -457,7 +458,7 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
 
   async function handleAnalyze() {
     if (!symbol) return;
-    setLoading(true); setError(""); setResult(null);
+    setLoading(true); setError(""); setResult(null); setIsCached(false);
     try {
       const data = await apiPost("/api/analysis", {
         symbol,
@@ -483,9 +484,6 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
 
   return (
     <div style={{ marginTop: 0 }}>
-      {loadingSaved && (
-        <div style={{ fontSize: 12, color: "var(--muted-2)", marginBottom: 10 }}>Загружаю сохранённый анализ…</div>
-      )}
       {/* Кнопка и счётчик квоты */}
       <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
         <button
@@ -504,6 +502,16 @@ export default function AIAnalysis({ signal, symbol, quota: initialQuota, onQuot
         >
           {loading ? "Анализирую…" : "Запустить AI-анализ"}
         </button>
+
+        {loadingSaved && (
+          <span style={{ fontSize: 12, color: "var(--muted-2)" }}>Загрузка…</span>
+        )}
+
+        {isCached && result && !loading && (
+          <span style={{ fontSize: 12, color: "var(--muted)", background: "var(--ink-2)", border: "1px solid var(--border)", borderRadius: 6, padding: "3px 9px" }}>
+            Прошлый анализ · {result.analyzed_at?.slice(0, 10)}. Нажмите кнопку для свежего.
+          </span>
+        )}
 
         {quota && (
           <span style={{ fontSize: 12, opacity: 0.6 }}>

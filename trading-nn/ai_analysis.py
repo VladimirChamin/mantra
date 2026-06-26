@@ -452,7 +452,10 @@ def fetch_onchain(symbol: str) -> Optional[dict]:
 # ─── 5. Фундаментал: РФ акции через T-Invest ─────────────────────────────────
 
 _TINVEST_BASE = "https://invest-public-api.tbank.ru/rest"
-_TINVEST_TOKEN = os.environ.get("TINVEST_TOKEN", "")
+
+
+def _tinvest_token() -> str:
+    return os.environ.get("TINVEST_TOKEN", "").strip()
 
 # Известные тикеры MOEX → uid (кэш чтобы не делать поиск при каждом вызове)
 _TINVEST_UID_CACHE: dict[str, str] = {}
@@ -469,7 +472,8 @@ def _is_ru_stock(symbol: str) -> bool:
 
 
 def _tinvest_find_uid(symbol: str) -> Optional[str]:
-    if not _TINVEST_TOKEN:
+    token = _tinvest_token()
+    if not token:
         return None
     sym = symbol.upper()
     if sym in _TINVEST_UID_CACHE:
@@ -477,7 +481,7 @@ def _tinvest_find_uid(symbol: str) -> Optional[str]:
     try:
         r = httpx.post(
             f"{_TINVEST_BASE}/tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument",
-            headers={"Authorization": f"Bearer {_TINVEST_TOKEN}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"query": sym, "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED", "apiTradeAvailableFlag": False},
             timeout=FETCH_TIMEOUT,
         )
@@ -499,7 +503,8 @@ def fetch_ru_fundamentals(symbol: str) -> Optional[dict]:
     Фундаментальные данные по акции РФ через T-Invest GetFundamentals.
     Возвращает словарь с ключевыми мультипликаторами или None.
     """
-    if not _TINVEST_TOKEN:
+    token = _tinvest_token()
+    if not token:
         log.debug("TINVEST_TOKEN не задан — фундаментал РФ недоступен")
         return None
     uid = _tinvest_find_uid(symbol)
@@ -508,7 +513,7 @@ def fetch_ru_fundamentals(symbol: str) -> Optional[dict]:
     try:
         r = httpx.post(
             f"{_TINVEST_BASE}/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetFundamentals",
-            headers={"Authorization": f"Bearer {_TINVEST_TOKEN}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"assets": [uid]},
             timeout=FETCH_TIMEOUT,
         )
@@ -675,7 +680,10 @@ def fetch_us_fundamentals(symbol: str) -> Optional[dict]:
 # ─── 6b. Фундаментал: США акции через Financial Modeling Prep ────────────────
 
 _FMP_BASE = "https://financialmodelingprep.com/api/v3"
-_FMP_KEY  = os.environ.get("FINANCIALDATA_API_KEY", "")
+
+
+def _fmp_key() -> str:
+    return os.environ.get("FINANCIALDATA_API_KEY", "").strip()
 
 
 def fetch_us_fundamentals_fmp(symbol: str) -> Optional[dict]:
@@ -683,14 +691,15 @@ def fetch_us_fundamentals_fmp(symbol: str) -> Optional[dict]:
     Фундаментальные данные по акции США через FMP (financialdata.net).
     Использует тот же API-ключ FINANCIALDATA_API_KEY.
     """
-    if not _FMP_KEY:
+    key = _fmp_key()
+    if not key:
         log.debug("FINANCIALDATA_API_KEY не задан")
         return None
 
     sym = symbol.upper()
 
     def _get(path, params=None):
-        p = {"apikey": _FMP_KEY, **(params or {})}
+        p = {"apikey": key, **(params or {})}
         try:
             r = httpx.get(f"{_FMP_BASE}{path}", params=p, timeout=FETCH_TIMEOUT)
             r.raise_for_status()
