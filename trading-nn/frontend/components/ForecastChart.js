@@ -91,11 +91,14 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     return <div className="empty">Прогноз появится после запроса к обученной модели.</div>;
   }
 
-  const { history, forecast, levels, last_price, pivot_levels, indicators, symbol, interval, oos_auc, signal, signal_status } = data;
+  const { history, forecast, levels, last_price, pivot_levels, indicators, symbol, interval, oos_auc, signal, signal_status, fft } = data;
   const hN = history.length;
   const fN = forecast.length;
   const nowIdx = hN - 1;
   const totalBars = hN + fN;
+
+  const fftPrices = fft?.fft_forecast || [];
+  const fftCycles = fft?.cycles || [];
 
   const effCount = Math.max(5, Math.min(totalBars, visCount ?? totalBars));
   const effStart = Math.max(0, Math.min(visStart, totalBars - effCount));
@@ -162,6 +165,7 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
     ...(showIndicators ? bbLPts.filter(p => p.x >= effStart && p.x < effStart + effCount).map(p => p.v) : []),
     ...visA.filter(b => b.high != null).map(b => b.high),
     ...visA.filter(b => b.low  != null).map(b => b.low),
+    ...fftPrices.filter((_, i) => (hN + i) >= effStart && (hN + i) < effStart + effCount).map(p => p.price),
   ];
   if (hasTrade) vals.push(levels.entry, levels.stop_loss, levels.take_profit);
   let lo = vals.length ? Math.min(...vals) : 0;
@@ -608,6 +612,29 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
                 );
               })}
 
+              {/* FFT-линия циклов */}
+              {fftPrices.length > 1 && (() => {
+                const pts = fftPrices
+                  .map((p, i) => {
+                    const gi = hN + i;
+                    if (gi < effStart || gi >= effStart + effCount) return null;
+                    return `${i === 0 ? "M" : "L"}${xBar(gi).toFixed(1)},${yv(p.price).toFixed(1)}`;
+                  })
+                  .filter(Boolean);
+                if (pts.length < 2) return null;
+                // соединяем с последней исторической точкой
+                const firstGi = hN;
+                const connectPt = firstGi >= effStart && firstGi < effStart + effCount
+                  ? `M${xBar(nowIdx).toFixed(1)},${yv(history[nowIdx].close).toFixed(1)} L${xBar(firstGi).toFixed(1)},${yv(fftPrices[0].price).toFixed(1)}`
+                  : "";
+                return (
+                  <g>
+                    {connectPt && <path d={connectPt} fill="none" stroke="#a78bfa" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />}
+                    <path d={pts.join(" ")} fill="none" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="4 3" opacity="0.75" />
+                  </g>
+                );
+              })()}
+
               {/* Уровни сделки */}
               {levelLines.map((l, i) => (
                 <line key={i} x1={nowX ?? padL} y1={yv(l.v)} x2={padL + innerW} y2={yv(l.v)}
@@ -788,6 +815,50 @@ export default function ForecastChart({ data, isAdmin, actuals }) {
         )}
 
       </div>
+
+      {/* ── FFT-циклы ─────────────────────────────────────────────── */}
+      {fftCycles.length > 0 && (
+        <div style={{
+          border: "1px solid var(--line)", borderRadius: 10,
+          background: "var(--panel)", overflow: "hidden",
+        }}>
+          <div style={{
+            padding: "9px 14px", borderBottom: "1px solid var(--line-soft)",
+            display: "flex", alignItems: "center", gap: 10,
+          }}>
+            <svg width="18" height="8"><line x1="0" y1="4" x2="18" y2="4" stroke="#a78bfa" strokeWidth="1.5" strokeDasharray="4 3" /></svg>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              FFT-циклы
+            </span>
+            {fft?.dominant_period && (
+              <span style={{ fontSize: 11, color: "#a78bfa", fontFamily: "var(--mono)" }}>
+                доминирующий: {fftCycles[0]?.label || `${fft.dominant_period} баров`}
+              </span>
+            )}
+            {fft?.r2 != null && (
+              <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>
+                R²={fft.r2.toFixed(2)}
+              </span>
+            )}
+          </div>
+          <div style={{ padding: "10px 14px", display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {fftCycles.map((c, i) => (
+              <div key={i} style={{
+                background: i === 0 ? "rgba(167,139,250,.12)" : "var(--ink-2)",
+                border: `1px solid ${i === 0 ? "#a78bfa44" : "var(--line)"}`,
+                borderRadius: 8, padding: "6px 12px",
+              }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 2 }}>
+                  {i === 0 ? "★ " : ""}{c.label}
+                </div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, color: i === 0 ? "#a78bfa" : "var(--text)" }}>
+                  {c.amplitude_pct.toFixed(2)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Обоснование прогноза ──────────────────────────────────── */}
       {signal?.explanation?.length > 0 && (

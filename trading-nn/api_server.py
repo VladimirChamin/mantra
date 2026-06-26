@@ -907,19 +907,41 @@ def forecast(
         active = auth.get_active_models()  # [] = все активны
         result = tn.forecast(cfg, steps=req.steps, history=req.history,
                              active_tags=active if active else None)
+
+        # ── FFT-анализ циклов ─────────────────────────────────────────────────
+        try:
+            import fft_cycles as _fft
+            df_full = tn.load_ohlcv(cfg)
+            closes = df_full["close"].values
+            # берём достаточно истории для надёжного FFT (минимум 64 бара)
+            fft_lookback = max(64, min(256, len(closes)))
+            fft_result = _fft.analyze_cycles(
+                closes[-fft_lookback:],
+                horizon=req.steps,
+                top_k=5,
+                min_period=3,
+            )
+            # добавляем человекочитаемые названия циклов
+            for c in fft_result.get("cycles", []):
+                c["label"] = _fft.label_cycle(c["period_bars"], req.interval)
+            result["fft"] = fft_result
+        except Exception as _e:
+            result["fft"] = {"fft_forecast": [], "cycles": [], "error": str(_e)}
+
         # сохраняем сигнал в историю вместе с данными для графика
         if result.get("signal"):
             import json as _json
             sig = dict(result["signal"])
             sig["interval"] = req.interval
             fc_json = _json.dumps({
-                "history":     result.get("history", []),
-                "forecast":    result.get("forecast", []),
-                "levels":      result.get("levels"),
-                "last_price":  result.get("last_price"),
-                "signal":      result.get("signal"),
+                "history":      result.get("history", []),
+                "forecast":     result.get("forecast", []),
+                "levels":       result.get("levels"),
+                "last_price":   result.get("last_price"),
+                "signal":       result.get("signal"),
                 "pivot_levels": result.get("pivot_levels"),
-                "indicators":  result.get("indicators"),
+                "indicators":   result.get("indicators"),
+                "fft":          result.get("fft"),
             })
             explanation = sig.get("explanation")
             expl_json = _json.dumps(explanation, ensure_ascii=False) if explanation else None
