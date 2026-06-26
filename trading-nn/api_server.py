@@ -913,7 +913,6 @@ def forecast(
             import fft_cycles as _fft
             df_full = tn.load_ohlcv(cfg)
             closes = df_full["close"].values
-            # берём достаточно истории для надёжного FFT (минимум 64 бара)
             fft_lookback = max(64, min(256, len(closes)))
             fft_result = _fft.analyze_cycles(
                 closes[-fft_lookback:],
@@ -921,10 +920,72 @@ def forecast(
                 top_k=5,
                 min_period=3,
             )
-            # добавляем человекочитаемые названия циклов
             for c in fft_result.get("cycles", []):
                 c["label"] = _fft.label_cycle(c["period_bars"], req.interval)
             result["fft"] = fft_result
+
+            # ── добавляем FFT-строку в Обоснование прогноза ──────────────────
+            fft_prices = fft_result.get("fft_forecast", [])
+            cycles = fft_result.get("cycles", [])
+            r2 = fft_result.get("r2", 0.0)
+            dom = cycles[0] if cycles else None
+
+            if fft_prices and dom:
+                price0 = float(closes[-1])
+                fft_end = fft_prices[-1]["price"]
+                fft_chg = (fft_end - price0) / price0 * 100
+
+                fft_up   = fft_chg >  0.2
+                fft_dn   = fft_chg < -0.2
+                fft_flat = not fft_up and not fft_dn
+
+                sig_direction = result.get("signal", {}).get("direction", "FLAT")
+                sig_long  = sig_direction == "LONG"
+                sig_short = sig_direction == "SHORT"
+
+                dom_label = dom.get("label") or f"{dom['period_bars']:.0f} баров"
+                dom_amp   = dom.get("amplitude_pct", 0)
+
+                if r2 >= 0.4:
+                    quality = "сигнал чёткий"
+                elif r2 >= 0.2:
+                    quality = "сигнал умеренный"
+                else:
+                    quality = "сигнал слабый"
+
+                if fft_flat:
+                    direction_text = "нейтральное движение"
+                elif fft_up:
+                    direction_text = f"рост ~{fft_chg:.1f}%"
+                else:
+                    direction_text = f"снижение ~{abs(fft_chg):.1f}%"
+
+                fft_line = (
+                    f"FFT-циклы ({quality}, R²={r2:.0%}): доминирующий цикл {dom_label}, "
+                    f"амплитуда {dom_amp:.2f}% — экстраполяция указывает на {direction_text} "
+                    f"за {req.steps} баров."
+                )
+
+                if fft_flat:
+                    verdict = "Цикл в нейтральной фазе — дополнительного подтверждения нет."
+                elif (fft_up and sig_long) or (fft_dn and sig_short):
+                    verdict = "Циклический анализ подтверждает идею нейросети."
+                elif (fft_up and sig_short) or (fft_dn and sig_long):
+                    verdict = "Цикл противоречит сигналу нейросети — повышенная осторожность."
+                elif fft_up:
+                    verdict = "Цикл указывает вверх, но нейросеть сигнала не даёт."
+                else:
+                    verdict = "Цикл указывает вниз, но нейросеть сигнала не даёт."
+
+                fft_explanation = f"{fft_line} {verdict}"
+
+                if result.get("signal") is not None:
+                    expl = result["signal"].get("explanation")
+                    if isinstance(expl, list):
+                        expl.append(fft_explanation)
+                    else:
+                        result["signal"]["explanation"] = [fft_explanation]
+
         except Exception as _e:
             result["fft"] = {"fft_forecast": [], "cycles": [], "error": str(_e)}
 
