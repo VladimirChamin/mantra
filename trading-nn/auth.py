@@ -122,9 +122,13 @@ def init_db() -> None:
                     signal_time      DATETIME,
                     forecast_json    LONGTEXT,
                     explanation_json LONGTEXT,
+                    actuals_json     LONGTEXT,
                     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_user (user_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                ALTER TABLE signals ADD COLUMN IF NOT EXISTS actuals_json LONGTEXT
             """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS active_models (
@@ -517,6 +521,20 @@ def get_all_signals(limit: int = 200) -> list[dict]:
             """, (limit,))
             rows = cur.fetchall()
         return _serialize_rows(rows)
+    finally:
+        con.close()
+
+
+def update_signal_actuals(signal_id: int, user_id: int, actuals_json: str) -> bool:
+    con = _con()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "UPDATE signals SET actuals_json=%s WHERE id=%s AND user_id=%s",
+                (actuals_json, signal_id, user_id)
+            )
+            con.commit()
+            return cur.rowcount > 0
     finally:
         con.close()
 

@@ -1020,6 +1020,52 @@ def get_actuals(
         raise HTTPException(500, str(e))
 
 
+@app.post("/api/signals/{signal_id}/actuals", tags=["signals"])
+def save_signal_actuals(
+    signal_id: int,
+    current_user: dict = Depends(auth.get_current_user),
+):
+    """
+    Подкачивает реальные котировки для сохранённого сигнала и сохраняет их в БД.
+    Возвращает бары и статус сигнала.
+    """
+    signals = auth.get_signals(current_user["id"])
+    sig = next((s for s in signals if s["id"] == signal_id), None)
+    if not sig:
+        raise HTTPException(404, "Сигнал не найден")
+
+    forecast_data = _json.loads(sig["forecast_json"]) if sig.get("forecast_json") else {}
+    history = forecast_data.get("history", [])
+    from_time = history[-1]["time"] if history else str(sig.get("signal_time", ""))
+    steps = len(forecast_data.get("forecast", [])) or 10
+
+    try:
+        cfg = tn.make_config(sig["symbol"], sig["interval"])
+        df  = tn.load_ohlcv(cfg)
+        if from_time:
+            dt = pd.Timestamp(from_time)
+            if df.index.tz is not None and dt.tzinfo is None:
+                dt = dt.tz_localize(df.index.tz)
+            elif df.index.tz is None and dt.tzinfo is not None:
+                dt = dt.tz_localize(None)
+            df = df[df.index > dt]
+        df = df.head(steps + 1)
+        bars = [
+            {
+                "time":  str(ts),
+                "open":  round(float(row.open),  2),
+                "high":  round(float(row.high),  2),
+                "low":   round(float(row.low),   2),
+                "close": round(float(row.close), 2),
+            }
+            for ts, row in df.iterrows()
+        ]
+        auth.update_signal_actuals(signal_id, current_user["id"], _json.dumps(bars))
+        return {"ok": True, "bars": bars, "count": len(bars)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 @app.get("/api/ai_quota", tags=["analysis"])
 def ai_quota(current_user: dict = Depends(auth.get_current_user)):
     """Текущий остаток AI-запросов пользователя."""

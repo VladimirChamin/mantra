@@ -459,16 +459,32 @@ export default function Dashboard() {
       const fromTime = history.length > 0 ? history[history.length - 1].time : s.signal_time || s.created_at;
       const steps = (data.forecast || []).length || 10;
 
+      // если уже есть сохранённые актуалы — показываем их сразу
+      const savedActuals = s.actuals_json ? JSON.parse(s.actuals_json) : [];
+
       setHistoryFc({
         ...data,
         signal: signalWithExpl,
         signal_id: s.id,
+        _signalId: s.id,
         symbol: s.symbol,
         interval: s.interval,
         _fromTime: fromTime,
         _steps: steps,
-        actuals: [],
+        actuals: savedActuals,
       });
+
+      // автоматически подкачиваем и сохраняем актуальные котировки
+      setActualsLoading(true);
+      try {
+        const res = await api.saveSignalActuals(s.id);
+        setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [] } : prev);
+        // обновляем сигнал в локальном списке
+        setSignals(prev => prev.map(x => x.id === s.id ? { ...x, actuals_json: JSON.stringify(res.bars || []) } : x));
+      } catch (e) {
+        console.error("saveSignalActuals error", e);
+      }
+      setActualsLoading(false);
     } catch {}
   }
 
@@ -476,18 +492,9 @@ export default function Dashboard() {
     if (!historyFc) return;
     setActualsLoading(true);
     try {
-      const sig = historyFc.signal || {};
-      const res = await api.getActuals({
-        symbol: historyFc.symbol,
-        interval: historyFc.interval,
-        from_time: historyFc._fromTime,
-        steps: historyFc._steps,
-        signal_direction: sig.direction,
-        signal_entry: sig.entry,
-        signal_sl: sig.stop_loss,
-        signal_tp: sig.take_profit,
-      });
-      setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [], signal_status: res.signal_status } : prev);
+      const res = await api.saveSignalActuals(historyFc._signalId);
+      setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [] } : prev);
+      setSignals(prev => prev.map(x => x.id === historyFc._signalId ? { ...x, actuals_json: JSON.stringify(res.bars || []) } : x));
     } catch (e) {
       console.error("loadActuals error", e);
     }

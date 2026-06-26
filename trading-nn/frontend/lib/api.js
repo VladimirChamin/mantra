@@ -116,6 +116,7 @@ export const api = {
   screenerStatus: (jid) => req(`/api/screener/${jid}`),
   screenerCancel: (jid) => req(`/api/screener/${jid}/cancel`, { method: "POST" }),
   getSignalAnalysis: (signalId) => req(`/api/signals/${signalId}/analysis`),
+  saveSignalActuals: (signalId) => req(`/api/signals/${signalId}/actuals`, { method: "POST" }),
   getActuals: ({ symbol, interval, from_time, steps, signal_direction, signal_entry, signal_sl, signal_tp }) => {
     const p = new URLSearchParams({
       symbol, interval,
