@@ -1141,10 +1141,21 @@ def save_signal_actuals(
     signal_info = forecast_data.get("signal") or {}
 
     try:
-        # Грузим только хвост — нужно (steps+1) баров после from_time.
-        # Берём небольшой период чтобы не тянуть всю историю.
-        interval_to_period = {"1d": "90d", "4h": "30d", "1h": "10d"}
-        tail_period = interval_to_period.get(sig["interval"], "90d")
+        # Вычисляем период динамически: от from_time до сегодня + небольшой буфер.
+        # Это гарантирует что бары после сигнала попадут в выборку независимо от давности.
+        if from_time:
+            try:
+                signal_dt = pd.Timestamp(from_time)
+                if signal_dt.tzinfo is not None:
+                    signal_dt = signal_dt.tz_localize(None)
+                days_since = max(10, (pd.Timestamp.now() - signal_dt).days + 5)
+                tail_period = f"{days_since}d"
+            except Exception:
+                tail_period = "365d"
+        else:
+            interval_to_period = {"1d": "90d", "4h": "30d", "1h": "10d"}
+            tail_period = interval_to_period.get(sig["interval"], "90d")
+
         cfg = tn.make_config(sig["symbol"], sig["interval"], period=tail_period)
         tn.invalidate_ohlcv_cache(sig["symbol"], sig["interval"])  # хотим свежие данные
         df  = tn.load_ohlcv(cfg)

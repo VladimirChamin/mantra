@@ -480,44 +480,50 @@ export default function Dashboard() {
 
   async function viewSignalChart(s) {
     if (!s.forecast_json) return;
+    let data;
     try {
-      const data = JSON.parse(s.forecast_json);
-      const explanation = s.explanation_json ? JSON.parse(s.explanation_json) : null;
-      const signal = data.signal || null;
-      const signalWithExpl = signal
-        ? { ...signal, explanation: explanation || signal.explanation }
-        : explanation ? { explanation } : null;
+      data = JSON.parse(s.forecast_json);
+    } catch (e) {
+      console.error("forecast_json parse error", e);
+      return;
+    }
 
-      const history = data.history || [];
-      const fromTime = history.length > 0 ? history[history.length - 1].time : s.signal_time || s.created_at;
-      const steps = (data.forecast || []).length || 10;
+    const explanation = s.explanation_json ? JSON.parse(s.explanation_json) : null;
+    const signal = data.signal || null;
+    const signalWithExpl = signal
+      ? { ...signal, explanation: explanation || signal.explanation }
+      : explanation ? { explanation } : null;
 
-      // если уже есть сохранённые актуалы — показываем их сразу
-      const savedActuals = s.actuals_json ? JSON.parse(s.actuals_json) : [];
+    const history = data.history || [];
+    const fromTime = history.length > 0 ? history[history.length - 1].time : s.signal_time || s.created_at;
+    const steps = (data.forecast || []).length || 10;
 
-      setHistoryFc({
-        ...data,
-        signal: signalWithExpl,
-        signal_id: s.id,
-        _signalId: s.id,
-        symbol: s.symbol,
-        interval: s.interval,
-        _fromTime: fromTime,
-        _steps: steps,
-        actuals: savedActuals,
-      });
+    const savedActuals = s.actuals_json ? JSON.parse(s.actuals_json) : [];
 
-      // автоматически подкачиваем и сохраняем актуальные котировки
-      setActualsLoading(true);
-      try {
-        const res = await api.saveSignalActuals(s.id);
-        setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [], order_result: res.order_result || null } : prev);
-        setSignals(prev => prev.map(x => x.id === s.id ? { ...x, actuals_json: JSON.stringify(res.bars || []) } : x));
-      } catch (e) {
-        console.error("saveSignalActuals error", e);
-      }
+    setHistoryFc({
+      ...data,
+      signal: signalWithExpl,
+      signal_id: s.id,
+      _signalId: s.id,
+      symbol: s.symbol,
+      interval: s.interval,
+      _fromTime: fromTime,
+      _steps: steps,
+      actuals: savedActuals,
+    });
+
+    setActualsLoading(true);
+    try {
+      const res = await api.saveSignalActuals(s.id);
+      const bars = res.bars || [];
+      console.log(`[actuals] ${s.symbol} got ${bars.length} bars`);
+      setHistoryFc(prev => prev ? { ...prev, actuals: bars, order_result: res.order_result || null } : prev);
+      setSignals(prev => prev.map(x => x.id === s.id ? { ...x, actuals_json: JSON.stringify(bars) } : x));
+    } catch (e) {
+      console.error("saveSignalActuals error", e.message);
+    } finally {
       setActualsLoading(false);
-    } catch {}
+    }
   }
 
   async function loadActuals() {
