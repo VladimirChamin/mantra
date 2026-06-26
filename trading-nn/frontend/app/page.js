@@ -281,7 +281,6 @@ export default function Dashboard() {
     stocks_ru: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
     stocks_us: { interval: "1d", epochs: 40, period: "5y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "AAPL MSFT GOOGL AMZN NVDA META TSLA JPM V XOM" },
     crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
-    bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
     forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
     commodity: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "XAUUSD XAGUSD CL NG BRENT ZC ZW ZS" },
   });
@@ -875,9 +874,9 @@ export default function Dashboard() {
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
             {Object.entries(assetClasses || {
               stocks_ru: { label: "Акции РФ" }, stocks_us: { label: "Акции США" },
-              crypto: { label: "Крипта" }, bonds: { label: "Облигации" },
-              forex: { label: "Forex" }, commodity: { label: "Сырьё" },
-            }).map(([cls, meta]) => {
+              crypto: { label: "Крипта" }, forex: { label: "Forex" },
+              commodity: { label: "Сырьё" },
+            }).filter(([cls]) => !["bonds", "stocks"].includes(cls)).map(([cls, meta]) => {
               const trainedIntervals = Object.entries(meta.trained || {})
                 .filter(([, v]) => v).map(([iv]) => iv);
               return (

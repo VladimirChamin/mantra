@@ -276,6 +276,7 @@ ASSET_CLASS_META = {
         "description": "Металлы, энергоносители, с/х продукция",
         "default_symbols": ["XAUUSD", "XAGUSD", "CL", "NG", "BRENT", "ZC", "ZW", "ZS"],
     },
+    # bonds и stocks скрыты из UI но оставлены для совместимости с уже обученными моделями
 }
 
 
