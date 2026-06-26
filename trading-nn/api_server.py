@@ -1020,6 +1020,104 @@ def get_actuals(
         raise HTTPException(500, str(e))
 
 
+def _compute_order_result(signal: dict, bars: list[dict]) -> dict:
+    """
+    Вычисляет статус и финансовый результат сигнала по реальным барам.
+
+    Статусы:
+      pending    — отложенный ордер ещё не активирован (цена не достигла entry)
+      active     — ордер активирован, позиция открыта, горизонт не истёк
+      cancelled  — отложенный ордер не исполнен за горизонт
+      sl_hit     — закрыт по стоп-лоссу
+      tp_hit     — закрыт по тейк-профиту
+      expired    — горизонт истёк, закрыт по текущей цене
+
+    Возвращает dict с полями:
+      status, order_activated, activated_at, activated_price,
+      closed_at, close_price, pnl_pts, pnl_pct, bars_elapsed
+    """
+    direction  = signal.get("direction", "FLAT")
+    order_type = signal.get("order_type", "MARKET")
+    entry      = float(signal.get("entry") or 0)
+    sl         = float(signal.get("stop_loss") or 0)
+    tp         = float(signal.get("take_profit") or 0)
+
+    if direction == "FLAT" or not bars:
+        return {"status": "flat", "order_activated": False}
+
+    is_pending = order_type in ("BUYSTOP", "SELLSTOP", "LIMIT_BUY", "LIMIT_SELL")
+    activated  = not is_pending   # маркет-вход — сразу активирован
+    activated_at    = bars[0]["time"] if activated else None
+    activated_price = entry if activated else None
+
+    status     = "active" if activated else "pending"
+    closed_at      = None
+    close_price    = None
+
+    for bar in bars:
+        high  = float(bar["high"])
+        low   = float(bar["low"])
+        close = float(bar["close"])
+
+        # ── Активация отложенного ордера ──────────────────────────────────────
+        if not activated:
+            if order_type == "BUYSTOP"  and high  >= entry:
+                activated = True; activated_at = bar["time"]; activated_price = entry; status = "active"
+            elif order_type == "SELLSTOP" and low <= entry:
+                activated = True; activated_at = bar["time"]; activated_price = entry; status = "active"
+            elif order_type == "LIMIT_BUY"  and low <= entry:
+                activated = True; activated_at = bar["time"]; activated_price = entry; status = "active"
+            elif order_type == "LIMIT_SELL" and high >= entry:
+                activated = True; activated_at = bar["time"]; activated_price = entry; status = "active"
+            if not activated:
+                continue   # ждём активации
+
+        # ── Проверка SL / TP после активации ─────────────────────────────────
+        if direction == "LONG":
+            if low <= sl:
+                status = "sl_hit"; closed_at = bar["time"]; close_price = sl; break
+            if high >= tp:
+                status = "tp_hit"; closed_at = bar["time"]; close_price = tp; break
+        elif direction == "SHORT":
+            if high >= sl:
+                status = "sl_hit"; closed_at = bar["time"]; close_price = sl; break
+            if low <= tp:
+                status = "tp_hit"; closed_at = bar["time"]; close_price = tp; break
+
+    # ── Итог после обхода всех баров ─────────────────────────────────────────
+    if status in ("pending", "active"):
+        last_close = float(bars[-1]["close"])
+        if not activated:
+            status = "cancelled"
+            close_price = None
+        else:
+            status = "expired"
+            close_price = last_close
+            closed_at = bars[-1]["time"]
+
+    # ── P&L ──────────────────────────────────────────────────────────────────
+    pnl_pts = pnl_pct = None
+    ep = activated_price or entry
+    if close_price is not None and ep:
+        if direction == "LONG":
+            pnl_pts = round(close_price - ep, 5)
+        else:
+            pnl_pts = round(ep - close_price, 5)
+        pnl_pct = round(pnl_pts / ep * 100, 3) if ep else None
+
+    return {
+        "status":           status,          # pending/active/cancelled/sl_hit/tp_hit/expired
+        "order_activated":  activated,
+        "activated_at":     activated_at,
+        "activated_price":  activated_price,
+        "closed_at":        closed_at,
+        "close_price":      close_price,
+        "pnl_pts":          pnl_pts,
+        "pnl_pct":          pnl_pct,
+        "bars_elapsed":     len(bars),
+    }
+
+
 @app.post("/api/signals/{signal_id}/actuals", tags=["signals"])
 def save_signal_actuals(
     signal_id: int,
@@ -1027,7 +1125,7 @@ def save_signal_actuals(
 ):
     """
     Подкачивает реальные котировки для сохранённого сигнала и сохраняет их в БД.
-    Возвращает бары и статус сигнала.
+    Вычисляет статус ордера и финансовый результат.
     """
     signals = auth.get_signals(current_user["id"])
     sig = next((s for s in signals if s["id"] == signal_id), None)
@@ -1038,6 +1136,9 @@ def save_signal_actuals(
     history = forecast_data.get("history", [])
     from_time = history[-1]["time"] if history else str(sig.get("signal_time", ""))
     steps = len(forecast_data.get("forecast", [])) or 10
+
+    # параметры сигнала — из forecast_json (самый полный источник)
+    signal_info = forecast_data.get("signal") or {}
 
     try:
         cfg = tn.make_config(sig["symbol"], sig["interval"])
@@ -1060,8 +1161,10 @@ def save_signal_actuals(
             }
             for ts, row in df.iterrows()
         ]
+
+        order_result = _compute_order_result(signal_info, bars)
         auth.update_signal_actuals(signal_id, current_user["id"], _json.dumps(bars))
-        return {"ok": True, "bars": bars, "count": len(bars)}
+        return {"ok": True, "bars": bars, "count": len(bars), "order_result": order_result}
     except Exception as e:
         raise HTTPException(500, str(e))
 

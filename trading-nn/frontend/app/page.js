@@ -228,6 +228,39 @@ function SymbolTags({ value, onChange }) {
   );
 }
 
+const ORDER_STATUS_META = {
+  pending:   { label: "⏳ Ожидает активации", color: "var(--muted)",  bg: "var(--ink-2)" },
+  active:    { label: "● Позиция открыта",    color: "var(--primary)", bg: "rgba(59,111,240,.1)" },
+  cancelled: { label: "✕ Ордер отменён",      color: "var(--muted)",  bg: "var(--ink-2)" },
+  sl_hit:    { label: "✗ Стоп-лосс",          color: "var(--short)",  bg: "var(--short-dim)" },
+  tp_hit:    { label: "✓ Тейк-профит",        color: "var(--long)",   bg: "var(--long-dim)" },
+  expired:   { label: "⌛ Горизонт истёк",    color: "var(--muted)",  bg: "var(--ink-2)" },
+  flat:      { label: "— Нет сигнала",        color: "var(--muted)",  bg: "var(--ink-2)" },
+};
+
+function OrderResultBadge({ r }) {
+  if (!r) return null;
+  const meta = ORDER_STATUS_META[r.status] || ORDER_STATUS_META.flat;
+  const pnlColor = r.pnl_pct == null ? "var(--muted)" : r.pnl_pct >= 0 ? "var(--long)" : "var(--short)";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: meta.bg, color: meta.color }}>
+        {meta.label}
+      </span>
+      {r.order_activated && r.activated_price != null && (
+        <span style={{ fontSize: 11, color: "var(--muted)" }}>
+          вход <strong style={{ color: "var(--text)", fontFamily: "var(--mono)" }}>{r.activated_price}</strong>
+        </span>
+      )}
+      {r.pnl_pts != null && (
+        <span style={{ fontSize: 11, fontWeight: 600, color: pnlColor, fontFamily: "var(--mono)" }}>
+          {r.pnl_pts > 0 ? "+" : ""}{r.pnl_pts} ({r.pnl_pct > 0 ? "+" : ""}{r.pnl_pct}%)
+        </span>
+      )}
+    </span>
+  );
+}
+
 export default function Dashboard() {
   const [tab, setTab] = useState(null);
   const [health, setHealth] = useState(null);
@@ -478,8 +511,7 @@ export default function Dashboard() {
       setActualsLoading(true);
       try {
         const res = await api.saveSignalActuals(s.id);
-        setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [] } : prev);
-        // обновляем сигнал в локальном списке
+        setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [], order_result: res.order_result || null } : prev);
         setSignals(prev => prev.map(x => x.id === s.id ? { ...x, actuals_json: JSON.stringify(res.bars || []) } : x));
       } catch (e) {
         console.error("saveSignalActuals error", e);
@@ -493,7 +525,7 @@ export default function Dashboard() {
     setActualsLoading(true);
     try {
       const res = await api.saveSignalActuals(historyFc._signalId);
-      setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [] } : prev);
+      setHistoryFc(prev => prev ? { ...prev, actuals: res.bars || [], order_result: res.order_result || null } : prev);
       setSignals(prev => prev.map(x => x.id === historyFc._signalId ? { ...x, actuals_json: JSON.stringify(res.bars || []) } : x));
     } catch (e) {
       console.error("loadActuals error", e);
@@ -1298,24 +1330,9 @@ export default function Dashboard() {
                 </div>
               </div>
               {historyFc.actuals?.length > 0 && (
-                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
-                  Реальные котировки: <strong style={{ fontFamily: "var(--mono)", color: "var(--text)" }}>{historyFc.actuals.length}</strong> баров после прогноза
-                  {historyFc.signal_status && (
-                    <span style={{
-                      marginLeft: 12, padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                      background: historyFc.signal_status.status === "filled" ? "var(--long-dim)"
-                               : historyFc.signal_status.status === "invalidated" ? "var(--short-dim)"
-                               : "var(--ink-2)",
-                      color: historyFc.signal_status.status === "filled" ? "var(--long)"
-                           : historyFc.signal_status.status === "invalidated" ? "var(--short)"
-                           : "var(--muted)",
-                    }}>
-                      {historyFc.signal_status.status === "filled" ? "✓ Цель достигнута"
-                     : historyFc.signal_status.status === "invalidated" ? "✗ Сигнал отменён"
-                     : historyFc.signal_status.status === "expired" ? "⌛ Горизонт истёк"
-                     : "● Активен"}
-                    </span>
-                  )}
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+                  <span>Реальные котировки: <strong style={{ fontFamily: "var(--mono)", color: "var(--text)" }}>{historyFc.actuals.length}</strong> баров</span>
+                  {historyFc.order_result && <OrderResultBadge r={historyFc.order_result} />}
                 </div>
               )}
               <ForecastChart data={historyFc} isAdmin={isAdmin} actuals={historyFc.actuals} />
