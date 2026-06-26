@@ -1164,15 +1164,18 @@ def save_signal_actuals(
             tail_period = interval_to_period.get(sig["interval"], "90d")
 
         cfg = tn.make_config(sig["symbol"], sig["interval"], period=tail_period)
-        tn.invalidate_ohlcv_cache(sig["symbol"], sig["interval"])  # хотим свежие данные
+        tn.invalidate_ohlcv_cache(sig["symbol"], sig["interval"])
         df  = tn.load_ohlcv(cfg)
+
         if from_time:
             dt = pd.Timestamp(from_time)
-            if df.index.tz is not None and dt.tzinfo is None:
-                dt = dt.tz_localize(df.index.tz)
-            elif df.index.tz is None and dt.tzinfo is not None:
-                dt = dt.tz_localize(None)
+            # приводим tz к одному знаменателю
+            if df.index.tz is not None:
+                dt = dt.tz_localize(df.index.tz) if dt.tzinfo is None else dt.tz_convert(df.index.tz)
+            else:
+                dt = dt.tz_localize(None) if dt.tzinfo is not None else dt
             df = df[df.index > dt]
+
         df = df.head(steps + 1)
         bars = [
             {
@@ -1189,7 +1192,8 @@ def save_signal_actuals(
         auth.update_signal_actuals(signal_id, current_user["id"], _json.dumps(bars))
         return {"ok": True, "bars": bars, "count": len(bars), "order_result": order_result}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        import traceback
+        raise HTTPException(500, f"{e}\n{traceback.format_exc()}")
 
 
 @app.get("/api/ai_quota", tags=["analysis"])
