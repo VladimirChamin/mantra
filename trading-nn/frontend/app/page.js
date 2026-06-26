@@ -521,6 +521,7 @@ export default function Dashboard() {
   }
 
   async function loadActuals() {
+    // kept for potential future manual refresh — not wired to UI
     if (!historyFc) return;
     setActualsLoading(true);
     try {
@@ -1309,24 +1310,11 @@ export default function Dashboard() {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                 <h2 style={{ margin: 0 }}>Прогноз из истории</h2>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <button
-                    onClick={loadActuals}
-                    disabled={actualsLoading}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 6,
-                      padding: "6px 14px", borderRadius: 8, fontSize: 13,
-                      border: "1px solid var(--primary)", background: "rgba(59,111,240,.08)",
-                      color: "var(--primary)", cursor: actualsLoading ? "not-allowed" : "pointer",
-                      opacity: actualsLoading ? 0.6 : 1, fontFamily: "var(--body)",
-                    }}
-                  >
-                    {actualsLoading
-                      ? <><span className="spinner" style={{ width: 12, height: 12 }} /> Загрузка…</>
-                      : historyFc.actuals?.length
-                        ? `↻ Обновить котировки (${historyFc.actuals.length} баров)`
-                        : "↓ Подкачать котировки"
-                    }
-                  </button>
+                  {actualsLoading && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)" }}>
+                      <span className="spinner" style={{ width: 12, height: 12 }} /> Котировки…
+                    </span>
+                  )}
                   <button onClick={() => setHistoryFc(null)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18 }}>✕</button>
                 </div>
               </div>

@@ -1141,7 +1141,12 @@ def save_signal_actuals(
     signal_info = forecast_data.get("signal") or {}
 
     try:
-        cfg = tn.make_config(sig["symbol"], sig["interval"])
+        # Грузим только хвост — нужно (steps+1) баров после from_time.
+        # Берём небольшой период чтобы не тянуть всю историю.
+        interval_to_period = {"1d": "90d", "4h": "30d", "1h": "10d"}
+        tail_period = interval_to_period.get(sig["interval"], "90d")
+        cfg = tn.make_config(sig["symbol"], sig["interval"], period=tail_period)
+        tn.invalidate_ohlcv_cache(sig["symbol"], sig["interval"])  # хотим свежие данные
         df  = tn.load_ohlcv(cfg)
         if from_time:
             dt = pd.Timestamp(from_time)
