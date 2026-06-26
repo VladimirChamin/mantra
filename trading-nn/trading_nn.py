@@ -1147,9 +1147,9 @@ def train(cfg: Config, warm_start: bool = False, extra_callbacks=None,
     sample_weight = [sw_p, ones_tr, ones_tr, ones_tr]
 
     callbacks = [
-        EarlyStopping(monitor="val_auc", mode="max", patience=8, restore_best_weights=True),
+        EarlyStopping(monitor="val_p_up_auc", mode="max", patience=8, restore_best_weights=True),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, min_lr=1e-5),
-        ModelCheckpoint(paths["model"], monitor="val_auc", mode="max", save_best_only=True),
+        ModelCheckpoint(paths["model"], monitor="val_p_up_auc", mode="max", save_best_only=True),
     ]
     if extra_callbacks:
         callbacks.extend(extra_callbacks)
@@ -1331,9 +1331,9 @@ def train_universal(symbols: list[str], interval: str = "1d",
     model = build_model(cfg_proto.lookback, Xtr.shape[-1], cfg_proto)
 
     callbacks = [
-        EarlyStopping(monitor="val_auc", mode="max", patience=8, restore_best_weights=True),
+        EarlyStopping(monitor="val_p_up_auc", mode="max", patience=8, restore_best_weights=True),
         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=4, min_lr=1e-5),
-        ModelCheckpoint(paths["model"], monitor="val_auc", mode="max", save_best_only=True),
+        ModelCheckpoint(paths["model"], monitor="val_p_up_auc", mode="max", save_best_only=True),
     ]
     if extra_callbacks:
         callbacks.extend(extra_callbacks)
