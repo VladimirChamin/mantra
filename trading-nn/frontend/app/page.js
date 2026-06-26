@@ -19,7 +19,7 @@ import SymbolInput from "@/components/SymbolInput";
 import WalkForwardChart from "@/components/WalkForwardChart";
 import Notes from "@/components/Notes";
 
-const DEFAULT_INTERVALS = ["1d", "4h"];
+const DEFAULT_INTERVALS = ["1d", "4h", "1h"];
 
 // ── Вердикт walk-forward + кнопка активации ───────────────────────────────────
 function WfVerdictPanel({ result, symbol, interval }) {
@@ -276,9 +276,10 @@ export default function Dashboard() {
 
   // обучение по классам активов
   const [assetClasses, setAssetClasses] = useState(null);
-  const [activeClass, setActiveClass] = useState("stocks");
+  const [activeClass, setActiveClass] = useState("stocks_ru");
   const [classTrainParams, setClassTrainParams] = useState({
-    stocks:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    stocks_ru: { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SBER GAZP LKOH GMKN ROSN NVTK TATN MGNT YDEX MOEX" },
+    stocks_us: { interval: "1d", epochs: 40, period: "5y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "AAPL MSFT GOOGL AMZN NVDA META TSLA JPM V XOM" },
     crypto:    { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "BTCUSDT ETHUSDT SOLUSDT BNBUSDT XRPUSDT ADAUSDT" },
     bonds:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "SU26238RMFS4 SU26240RMFS0 SU26233RMFS5" },
     forex:     { interval: "1d", epochs: 40, period: "6y", entry_offset_mult: 0, horizon: 10, lookback: 32, warm_start: false, direction_filter: "both", excluded_features: [], symbols: "EURUSD GBPUSD USDJPY USDRUB EURRUB" },
@@ -873,8 +874,9 @@ export default function Dashboard() {
           {/* карточки классов */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
             {Object.entries(assetClasses || {
-              stocks: { label: "Акции" }, crypto: { label: "Крипта" },
-              bonds: { label: "Облигации" }, forex: { label: "Forex / Металлы" },
+              stocks_ru: { label: "Акции РФ" }, stocks_us: { label: "Акции США" },
+              crypto: { label: "Крипта" }, bonds: { label: "Облигации" },
+              forex: { label: "Forex" }, commodity: { label: "Сырьё" },
             }).map(([cls, meta]) => {
               const trainedIntervals = Object.entries(meta.trained || {})
                 .filter(([, v]) => v).map(([iv]) => iv);

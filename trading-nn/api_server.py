@@ -757,7 +757,7 @@ def meta():
     """Инструменты Мосбиржи, таймфреймы и пресеты — для автозаполнения форм."""
     return {
         "instruments": tn.MOEX_INSTRUMENTS,
-        "intervals": ["1d", "4h"],
+        "intervals": ["1d", "4h", "1h"],
         "presets": tn.TIMEFRAME_PRESETS,
         "backtest_presets": tn.BACKTEST_PRESETS,
     }
